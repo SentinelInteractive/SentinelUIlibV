@@ -34,3 +34,6 @@ native/**/build/
 native/harness/harness_cef_cache/
 native/harness/*.ppm
 native/harness/*.yuv
+native/harness/harness_page.html
+native/harness/harness_trace.txt
+native/harness/debug.log

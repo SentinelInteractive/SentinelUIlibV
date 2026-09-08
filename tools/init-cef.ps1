@@ -79,7 +79,7 @@ if ($LASTEXITCODE -ne 0) { throw "tar extraction failed with exit code $LASTEXIT
 
 $extracted = Get-ChildItem $cefRoot -Directory | Where-Object { $_.Name -like "cef_binary_$CefVersion*" } | Select-Object -First 1
 if (-not $extracted) { throw "Extraction produced no cef_binary_* folder (check name)." }
-if ((Resolve-Path $outDir).Path -ne (Resolve-Path $extracted.FullName).Path) {
+if ($extracted.FullName -ne $outDir) {
     & $dbg "Renaming $($extracted.Name) -> $CefVersion"
     Rename-Item $extracted.FullName $CefVersion
 }

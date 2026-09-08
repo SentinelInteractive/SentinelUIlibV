@@ -5,7 +5,7 @@
   "apiAssembly": "0.1.0",
   "bootstrapAssembly": "0.1.0",
   "envelope": 1,
-  "cef": "TBD (Phase 0 gate: LTS 144 vs 151)",
+  "cef": "144.0.34+g8fc21c8+chromium-144.0.7559.261",
   "minRphSdk": "1.124.0",
   "minLspdfr": "0.4.9",
   "targets": {

@@ -58,6 +58,19 @@ void Log(const char* fmt, ...) {
     va_end(ap);
 }
 
+// Minimal crash-locator: a plain file we can read even when the console output is lost
+// (failfast crashes die before stdout flushes).
+static FILE* g_traceFile = nullptr;
+void TraceLog(const char* fmt, ...) {
+    if (!g_traceFile) g_traceFile = std::fopen("harness_trace.txt", "a");
+    if (!g_traceFile) return;
+    va_list ap; va_start(ap, fmt);
+    std::vfprintf(g_traceFile, fmt, ap);
+    std::fprintf(g_traceFile, "\n");
+    std::fflush(g_traceFile);
+    va_end(ap);
+}
+
 // ---------------------------------------------------------------------------
 // Harness client: implements CefClient, CefRenderHandler, CefLifeSpanHandler,
 // CefDisplayHandler and the command-line switch sink (CefApp).
@@ -66,7 +79,8 @@ class HarnessApp : public CefApp,
                    public CefClient,
                    public CefRenderHandler,
                    public CefLifeSpanHandler,
-                   public CefDisplayHandler {
+                   public CefDisplayHandler,
+                   public CefLoadHandler {
 public:
     // CefApp
     void OnBeforeCommandLineProcessing(const CefString& /*process_type*/,
@@ -76,24 +90,42 @@ public:
         command_line->AppendSwitch("disable-gpu");
         command_line->AppendSwitch("disable-gpu-compositing");
         // Avoid noise from remote process spawns during the harness run.
-        command_line->AppendSwitch("disable-features", "SpareRendererProcessForSitePerProcess");
+        command_line->AppendSwitchWithValue("disable-features", "SpareRendererProcessForSitePerProcess");
     }
 
     // CefClient
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+    CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
 
-    // CefRenderHandler
-    bool GetViewRect(CefRefPtr<CefBrowser> /*browser*/, CefRect& rect) override {
-        rect = CefRect(0, 0, kWidth, kHeight);
-        return true;
+    // CefLoadHandler
+    void OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
+                              bool isLoading,
+                              bool canGoBack,
+                              bool canGoForward) override {
+        Log("OnLoadingStateChange: %s (canGoBack=%d canGoForward=%d)",
+            isLoading ? "loading" : "done", canGoBack, canGoForward);
     }
 
-    void GetScreenInfo(CefRefPtr<CefBrowser> /*browser*/, CefScreenInfo& screen) override {
+    void OnLoadError(CefRefPtr<CefBrowser> browser,
+                     CefRefPtr<CefFrame> frame,
+                     ErrorCode errorCode,
+                     const CefString& errorText,
+                     const CefString& failedUrl) override {
+        Log("OnLoadError: %d '%s' url=%s", errorCode, errorText.ToString().c_str(), failedUrl.ToString().c_str());
+    }
+
+    // CefRenderHandler
+    void GetViewRect(CefRefPtr<CefBrowser> /*browser*/, CefRect& rect) override {
+        rect = CefRect(0, 0, kWidth, kHeight);
+    }
+
+    bool GetScreenInfo(CefRefPtr<CefBrowser> /*browser*/, CefScreenInfo& screen) override {
         screen.device_scale_factor = 1.0f;
         screen.rect = CefRect(0, 0, kWidth, kHeight);
         screen.available_rect = screen.rect;
+        return true;
     }
 
     void OnPaint(CefRefPtr<CefBrowser> browser,
@@ -108,7 +140,16 @@ public:
 
         int count = InterlockedIncrement(&g_paintCount);
         if (count == 1) g_tFirstPaint = std::chrono::steady_clock::now();
-        if (count == 2) g_pageLoaded = true;          // first full page paint
+        if (count <= 8) {
+            // Paint cadence insight: how often does Chromium push frames for a static page?
+            static long last = 0;
+            auto now = std::chrono::steady_clock::now();
+            static auto tLast = now;
+            Log("paint #%d (%dx%d, +%lld ms since previous)",
+                count, width, height,
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - tLast).count());
+            tLast = now;
+        }
 
         std::memcpy(g_lastBuffer.data(), buffer, byteCount);
     }
@@ -234,15 +275,21 @@ bool D3d11Roundtrip(std::vector<uint8_t>& buffer) {
 // ---------------------------------------------------------------------------
 // Browser-process flow: runs on the dedicated CEF thread (Q1).
 // ---------------------------------------------------------------------------
-int RunBrowserProcess(CefMainArgs& args) {
+int RunBrowserProcess(const CefMainArgs& args) {
     CefSettings settings;
     settings.no_sandbox = true;
     settings.windowless_rendering_enabled = true;
-    settings.log_severity = LOGSEVERITY_WARNING;
-    CefString(&settings.root_cache_path) = "harness_cef_cache";
+    settings.log_severity = LOGSEVERITY_INFO;
+    // Absolute cache path (CEF rejects relative roots).
+    char exeDir[MAX_PATH]{};
+    GetModuleFileNameA(nullptr, exeDir, MAX_PATH);
+    std::string cachePath(exeDir);
+    auto pos = cachePath.find_last_of('\\');
+    if (pos != std::string::npos) cachePath = cachePath.substr(0, pos) + "\\harness_cef_cache";
+    CefString(&settings.root_cache_path) = cachePath;
     // Own subprocess: this exe doubles as the renderer/GPU-less child.
-    wchar_t exePath[MAX_PATH]; GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    CefString(&settings.browser_subprocess_path) = exePath;
+    wchar_t wexePath[MAX_PATH]; GetModuleFileNameW(nullptr, wexePath, MAX_PATH);
+    CefString(&settings.browser_subprocess_path) = wexePath;
 
     CefRefPtr<HarnessApp> app(new HarnessApp());
 
@@ -256,36 +303,56 @@ int RunBrowserProcess(CefMainArgs& args) {
         std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
 
     CefWindowInfo info;
-    info.SetAsWindowless(kNullWindowHandle, true);   // transparent OSR
+    // OSR is always transparent since CEF ~104 (background_color in browser settings
+    // controls the composite alpha). No HWND — pure offscreen like the in-game host.
+    info.SetAsWindowless(kNullWindowHandle);
 
-    static const std::string kPageUrl =
-        "data:text/html,<!DOCTYPE html><html><body style=\"margin:0;background:transparent\">"
-        "<div style=\"position:absolute;left:16px;top:16px;width:240px;height:120px;"
+    // Load from a real local file (file://) — content delivery closest to the final
+    // sentinelui:// scheme, and immune to data-URL encoding issues.
+    const char* kPageHtml =
+        "<!DOCTYPE html><html><body style=\"margin:0;background:transparent\">"
+        "<div style=\"position:absolute;left:16px;top:16px;width:260px;height:120px;"
         "background:rgba(0,120,255,0.65);padding:12px;color:#fff;font:bold 28px sans-serif\">"
         "SentinelUI harness</div>"
         "<div style=\"position:absolute;left:16px;top:160px;color:#222;font:14px monospace\">"
-        "transparent OSR page &mdash; background should show through</div>"
+        "transparent OSR page - background should show through</div>"
         "<script>setTimeout(function(){ console.log('NUI_TEST:hello-from-page'); },300);</script>"
         "</body></html>";
+
+    char pageExeDir[MAX_PATH]{};
+    GetModuleFileNameA(nullptr, pageExeDir, MAX_PATH);
+    std::string exeDirPath(pageExeDir);
+    auto slash = exeDirPath.find_last_of('\\');
+    if (slash != std::string::npos) exeDirPath = exeDirPath.substr(0, slash);
+    const std::string pagePath = exeDirPath + "\\harness_page.html";
+    {
+        std::ofstream page(pagePath, std::ios::binary);
+        page.write(kPageHtml, static_cast<std::streamsize>(std::strlen(kPageHtml)));
+    }
+    std::string pageUrl = "file:///" + pagePath;
+    std::string::size_type p = 0;
+    while ((p = pageUrl.find('\\', p)) != std::string::npos) pageUrl.replace(p, 1, "/");
 
     CefBrowserSettings browserSettings;
     browserSettings.background_color = CefColorSetARGB(0, 0, 0, 0);
 
     CefRefPtr<CefBrowser> browser =
-        CefBrowserHost::CreateBrowserSync(info, app.get(), kPageUrl, browserSettings, nullptr, nullptr);
+        CefBrowserHost::CreateBrowserSync(info, app.get(), pageUrl, browserSettings, nullptr, nullptr);
     if (!browser) {
         Log("Q2 FAIL: CreateBrowserSync returned null.");
         return 1;
     }
 
     // Message pump: dedicated-thread CefDoMessageLoopWork (Q3) — the pattern the in-game host uses.
+    // NOTE: a static page paints a couple of times after load, then goes fully idle
+    // (observed cadence: paints #1..n shortly after load, then nothing) — this is exactly
+    // the "no redraw when nothing changed" behavior the in-game host relies on.
     auto pumpStart = std::chrono::steady_clock::now();
     while (true) {
         CefDoMessageLoopWork();
-        if (g_pageLoaded && g_consoleMessageSeen &&
-            InterlockedAdd(&g_paintCount, 0) >= kPaintsForStability)
-            break;
-        if (std::chrono::steady_clock::now() - pumpStart > std::chrono::seconds(15))
+        bool enough = (InterlockedAdd(&g_paintCount, 0) >= 2) && g_consoleMessageSeen;
+        if (enough) break;
+        if (std::chrono::steady_clock::now() - pumpStart > std::chrono::seconds(10))
             break;
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
@@ -297,7 +364,7 @@ int RunBrowserProcess(CefMainArgs& args) {
         std::chrono::duration_cast<std::chrono::milliseconds>(tEnd - pumpStart).count(),
         g_tFirstPaint.time_since_epoch().count() ? std::chrono::duration_cast<std::chrono::milliseconds>(g_tFirstPaint - g_tInit).count() : -1);
 
-    bool ok = (paints >= 2) && g_pageLoaded;
+    bool ok = (paints >= 2) && g_consoleMessageSeen != 0;
 
     // Q4 result
     if (g_consoleMessageSeen) Log("Q4 PASS (see console line above).");
@@ -333,12 +400,17 @@ int RunBrowserProcess(CefMainArgs& args) {
 }  // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
+    TraceLog("wmain start");
+
     CefMainArgs mainArgs(GetModuleHandleW(nullptr));
     int subprocessExit = CefExecuteProcess(mainArgs, nullptr, nullptr);
+    TraceLog("CefExecuteProcess returned %d", subprocessExit);
     if (subprocessExit >= 0) return subprocessExit;   // we were spawned as a child process
 
-    std::thread cefThread([&mainArgs]() {
-        int result = RunBrowserProcess(mainArgs);
+    std::thread cefThread([]() {
+        TraceLog("cef thread start");
+        int result = RunBrowserProcess(CefMainArgs(GetModuleHandleW(nullptr)));
+        TraceLog("RunBrowserProcess returned %d", result);
         std::exit(result);
     });
     cefThread.detach();
