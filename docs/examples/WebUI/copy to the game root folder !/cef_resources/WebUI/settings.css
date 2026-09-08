@@ -1,0 +1,67 @@
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;700&display=swap');
+
+body, html {
+    margin: 0; padding: 0; height: 100%;
+    font-family: 'Chakra Petch', sans-serif;
+    overflow: hidden;
+    background: linear-gradient(rgba(130, 0, 0, 0.45), rgba(10, 0, 0, 0.75)), 
+                url('https://images.unsplash.com/photo-1614850523296-d8c1af93d400?q=80&w=2070&auto=format&fit=crop');
+    background-size: cover; background-position: center;
+}
+
+.pause-overlay {
+    position: absolute; inset: 0;
+    background: rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(8px);
+}
+
+.tab-button {
+    background-color: rgba(0, 0, 0, 0.9);
+    color: white; transition: all 0.1s ease;
+    border-left: 0px solid #ff0000; text-align: left;
+    padding: 0.7rem 1rem; text-transform: uppercase;
+    font-weight: 700; font-size: 0.95rem;
+}
+
+.tab-button:hover { background-color: rgba(255, 255, 255, 0.1); border-left: 8px solid #ff0000; padding-left: 1.5rem; }
+.tab-active { background-color: white !important; color: black !important; border-left: 0px !important; }
+
+.setting-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 9px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    cursor: pointer; text-transform: uppercase; font-weight: 700; font-size: 0.85rem;
+}
+
+.setting-row:not(.disabled):hover { background: white; color: black !important; }
+.setting-row:not(.disabled):hover .val-text { color: #cc0000 !important; }
+
+.disabled { opacity: 0.4; cursor: not-allowed; color: #666 !important; }
+
+#key-picker {
+    display: none; position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 300px; max-height: 400px;
+    background: rgba(0, 0, 0, 0.95);
+    border: 2px solid white; z-index: 100;
+}
+
+.key-option { padding: 10px; color: white; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); cursor: pointer; text-transform: uppercase; font-weight: bold; }
+.key-option:hover { background: white; color: black; }
+.custom-scroll::-webkit-scrollbar { width: 6px; }
+.custom-scroll::-webkit-scrollbar-track { background: #111; }
+.custom-scroll::-webkit-scrollbar-thumb { background: #ff0000; }
+
+#desc-box { background: rgba(0, 0, 0, 0.95); border-left: 3px solid #ff0000; min-height: 55px; }
+input[type="text"] { background: transparent; border: none; outline: none; text-align: right; width: 65%; font-family: inherit; color: #ef4444; font-weight: bold; }
+.condensed-text { font-size: 0.75rem; letter-spacing: 0.02em; }
+
+.warning-banner {
+    background: rgba(255, 0, 0, 0.2);
+    border-bottom: 1px solid red;
+    color: #ff4444;
+    padding: 8px;
+    font-size: 0.7rem;
+    text-align: center;
+    font-weight: 700;
+    text-transform: uppercase;
+}

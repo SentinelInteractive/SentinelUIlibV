@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>SentinelUI.API</AssemblyName>
+    <RootNamespace>SentinelUI</RootNamespace>
+    <Version>0.1.0</Version>
+    <!-- The managed bridge must never force a dependency on RPH/SHVDN at compile time.
+         It talks to the native host through exported C functions only. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets the .NET SDK build net472 without Visual Studio installed (CI-friendly). -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

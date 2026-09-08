@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>SentinelUI.Bootstrap</AssemblyName>
+    <RootNamespace>SentinelUI.Bootstrap</RootNamespace>
+    <Version>0.1.0</Version>
+    <!-- RPH SDK is compile-time only: NEVER ship RagePluginHook.dll (RPH provides it at runtime). -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="RagePluginHook" Version="1.124.0" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\SentinelUI.API\SentinelUI.API.csproj" />
+  </ItemGroup>
+
+</Project>

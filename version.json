@@ -1,0 +1,15 @@
+{
+  "name": "SentinelUI",
+  "manifest": 1,
+  "hostExports": 2,
+  "apiAssembly": "0.1.0",
+  "bootstrapAssembly": "0.1.0",
+  "envelope": 1,
+  "cef": "TBD (Phase 0 gate: LTS 144 vs 151)",
+  "minRphSdk": "1.124.0",
+  "minLspdfr": "0.4.9",
+  "targets": {
+    "game": "GTA V Legacy (D3D11)",
+    "os": "Windows 10/11 x64"
+  }
+}

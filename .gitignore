@@ -1,0 +1,29 @@
+# ===== Build outputs =====
+bin/
+obj/
+*.user
+.vs/
+.idea/
+*.suo
+
+# ===== Research docs: heavy CEF runtime binaries (375 MB on disk, NOT for git) =====
+docs/examples/WebUI/**/*.pak
+docs/examples/WebUI/**/*.dll
+docs/examples/WebUI/**/*.exe
+docs/examples/WebUI/**/*.asi
+docs/examples/WebUI/**/*.pdb
+docs/examples/WebUI/**/*.dat
+docs/examples/WebUI/**/*.bin
+
+# ===== Stray binaries anywhere (safety net) =====
+*.asi
+*.pdb
+*.dll
+*.exe
+*.pak
+*.dat
+*.bin
+
+# ===== Local runtime/game layout (created by packaging scripts) =====
+/SentinelUI/
+/dist/
