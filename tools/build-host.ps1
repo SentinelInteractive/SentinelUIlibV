@@ -1,5 +1,5 @@
-# build-host.ps1 — configure + build the in-game native host (SentinelUI.asi + worker).
-# Mirrors tools/build-harness.ps1 (vswhere -> vcvars64 -> Ninja + MSVC).
+# build-host.ps1 — build the in-game ASI compositor (SentinelUI.asi).
+# vswhere -> vcvars64 -> Ninja + MSVC. No CEF in this module anymore.
 
 param(
     [ValidateSet("Debug", "Release")]
@@ -14,15 +14,9 @@ $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.
 if (-not $vs) { throw "No Visual Studio with the C++ workload found." }
 $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
 $ninjaDir = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
-if (-not (Test-Path (Join-Path $ninjaDir "ninja.exe"))) { throw "ninja.exe not found under $ninjaDir" }
 $linkExe = Get-ChildItem (Join-Path $vs "VC\Tools\MSVC\*\bin\Hostx64\x64\link.exe") -ErrorAction SilentlyContinue |
     Sort-Object FullName -Descending | Select-Object -First 1
 $linkPath = $linkExe.FullName
-
-$stateFile = Join-Path $repo "native\third_party\cef-current.json"
-$cef = (Get-Content $stateFile -Raw | ConvertFrom-Json).path
-if (-not $cef -or -not (Test-Path (Join-Path $cef "cmake"))) { throw "CEF not extracted (run tools\init-cef.ps1)." }
-$cef = $cef -replace '\\', '/'
 
 $buildDir = Join-Path $repo "native\host\build"
 Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
@@ -31,9 +25,8 @@ $cmd = @"
 @echo off
 call "$vcvars" >nul
 if errorlevel 1 exit /b 1
-set "CEF_ROOT=$cef"
 set "PATH=$ninjaDir;%PATH%"
-cmake -G Ninja -DCMAKE_BUILD_TYPE=$Config -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl "-DCMAKE_LINKER=$linkPath" -DUSE_SANDBOX=OFF -B "$buildDir" -S "$repo\native\host"
+cmake -G Ninja -DCMAKE_BUILD_TYPE=$Config -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl "-DCMAKE_LINKER=$linkPath" -B "$buildDir" -S "$repo\native\host"
 if errorlevel 1 exit /b 1
 cmake --build "$buildDir"
 exit /b %errorlevel%

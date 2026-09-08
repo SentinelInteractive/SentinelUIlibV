@@ -21,8 +21,18 @@ public:
     // Recreates device resources if the backbuffer changed.
     bool EnsureResources(IDXGISwapChain* swapChain);
 
-    // Upload a new CEF BGRA frame into the overlay texture (no-op if empty).
-    void UploadFrame(const std::vector<uint8_t>& bgra, int width, int height);
+    // Upload a new BGRA frame into the overlay texture (no-op if null/small).
+    void UploadFrame(const uint8_t* data, int width, int height) {
+        if (!ready_ || context_ == nullptr || data == nullptr || width <= 0 || height <= 0) return;
+        D3D11_BOX box = {};
+        box.left = 0;
+        box.top = 0;
+        box.right = (UINT)width;
+        box.bottom = (UINT)height;
+        box.front = 0;
+        box.back = 1;
+        context_->UpdateSubresource(frameTex_, 0, &box, data, (UINT)width * 4, 0);
+    }
 
     // Draw the current overlay texture onto the swapchain backbuffer (game thread).
     void DrawFrame(IDXGISwapChain* swapChain);

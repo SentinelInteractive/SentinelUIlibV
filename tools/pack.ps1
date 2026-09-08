@@ -5,14 +5,14 @@
 # in a subfolder, resolved by absolute path in host code):
 #
 #   <game>\                          (GTA V root)
-#     SentinelUI.asi                 host module — ASI loader loads it like any ASI
-#     SentinelUI_Worker.exe          CEF subprocess
-#     libcef.dll *.pak icudtl.dat ... full CEF runtime (flat, next to the .asi)
+#     SentinelUI.asi                 ASI compositor — hooks Present/WndProc
+#     SentinelUI_Host.exe            dedicated CEF process (spawned by the ASI)
+#     libcef.dll *.pak icudtl.dat ... full CEF runtime (flat, next to the ASI)
 #     locales\                       CEF locale packs
 #     SentinelUI.API.dll             managed bridge (also copied to Plugins\)
 #     SentinelUI\
-#       content\p1_demo.html         P1 gate demo
-#       logs\                        host + API logs (own files; no RPH spam)
+#       content\p1_demo.html         P1 gate demo (+ selftest_page.html)
+#       logs\                        host + helper + API logs (no RPH spam)
 #       cache\                       CEF profile/cache
 #       LICENSE_CEF.txt
 #   <game>\Plugins\
@@ -33,7 +33,7 @@ $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if (-not (Test-Path $GameDir)) { throw "Game dir not found: $GameDir" }
-$hostOut = Join-Path $repo "native\host\build\$HostConfig"
+$hostOut = Join-Path $repo "native\host\build"
 if (-not (Test-Path (Join-Path $hostOut "SentinelUI.asi"))) { throw "Host not built (run tools\build-host.ps1)." }
 
 $cefState = Get-Content (Join-Path $repo "native\third_party\cef-current.json") -Raw | ConvertFrom-Json
@@ -45,7 +45,8 @@ $pluginsDir = Join-Path $GameDir "Plugins"
 Write-Host "[pack] Deploying to $GameDir" -ForegroundColor Cyan
 
 # ---- clean previous versions (our own artifacts; safe to recreate) ----
-$rootArtifacts = @("SentinelUI.asi", "SentinelUI_Worker.exe", "libcef.dll", "chrome_elf.dll",
+$rootArtifacts = @("SentinelUI.asi", "SentinelUI_Host.exe", "SentinelUI_Worker.exe",
+                   "libcef.dll", "chrome_elf.dll",
                    "icudtl.dat", "resources.pak", "chrome_100_percent.pak", "chrome_200_percent.pak",
                    "v8_context_snapshot.bin", "libEGL.dll", "libGLESv2.dll", "d3dcompiler_47.dll",
                    "dxil.dll", "dxcompiler.dll", "vk_swiftshader.dll", "vk_swiftshader_icd.json",
@@ -57,12 +58,18 @@ foreach ($name in $rootArtifacts) {
 if (Test-Path $suiDir) { Remove-Item -Recurse -Force $suiDir }
 New-Item -ItemType Directory -Force -Path (Join-Path $suiDir "content"), (Join-Path $suiDir "cache"), (Join-Path $suiDir "logs") | Out-Null
 
-# ---- host module + worker + CEF runtime (flat at game root) ----
-Get-ChildItem $hostOut | Where-Object { $_.Name -notin @("SentinelUI.lib", "SentinelUI.exp", "SentinelUI.pdb") } |
+# ---- host module (ASI compositor) ----
+Copy-Item (Join-Path $repo "native\host\build\SentinelUI.asi") $GameDir
+
+# ---- helper process + full CEF runtime (flat at game root) ----
+$helperOut = Join-Path $repo "native\helper\build\Release"
+if (-not (Test-Path (Join-Path $helperOut "SentinelUI_Host.exe"))) { throw "Helper not built (run tools\build-helper.ps1)." }
+Get-ChildItem $helperOut | Where-Object { $_.Name -notin @("SentinelUI.lib", "SentinelUI.exp", "SentinelUI.pdb") } |
     Copy-Item -Destination $GameDir -Recurse -Force
 
 # ---- content + license ----
 Copy-Item (Join-Path $repo "web\content\p1_demo.html") (Join-Path $suiDir "content")
+Copy-Item (Join-Path $repo "web\content\selftest_page.html") (Join-Path $suiDir "content")
 $cefLicense = Join-Path $cefRoot "LICENSE.txt"
 if (Test-Path $cefLicense) { Copy-Item $cefLicense (Join-Path $suiDir "LICENSE_CEF.txt") } else { Write-Host "[pack] WARN cef LICENSE.txt not found" -ForegroundColor Yellow }
 

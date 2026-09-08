@@ -1,36 +1,75 @@
-// SentinelUI native host — module entry + exported C API.
+// SentinelUI host (ASI) — module entry + exported C API.
+// No CEF here anymore: this module spawns and supervises SentinelUI_Host.exe
+// (the dedicated CEF process), consumes its shared-memory frames, and hooks the
+// game (Present + WndProc) to composite them.
 //
 // Lifecycle:
-//   DllMain(PROCESS_ATTACH)  -> spawns a detached boot thread (NEVER do CEF or
-//                               hook work inside DllMain loader lock).
-//   boot thread              -> find game window, install swapchain+WndProc hooks,
-//                               start the dedicated CEF thread.
-//   SuiShutdown() (Bootstrap unload, game thread) -> stop CEF, remove hooks.
+//   DllMain(PROCESS_ATTACH)  -> detached boot thread (never hook/spawn in DllMain).
+//   boot thread              -> find game window -> install hooks -> start helper
+//                               -> open shared memory (frame source).
+//   SuiShutdown() (Bootstrap unload) -> stop helper, remove hooks.
 
 #include "exports.h"
-#include "cef_host.h"
+#include "framesrc.h"
 #include "hooks.h"
 #include "renderer.h"
 #include "suilog.h"
 
 #include <shellapi.h>
 #include <string>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdarg>
 #include <cwchar>
 
 namespace sui_host {
 
-CefHost g_host;
+// Paths resolved at DllMain time (module-relative; host lives at game root).
+struct HostPaths {
+    std::wstring moduleDir;
+    std::wstring helperExe;
+    std::wstring contentFile;
+    std::wstring cacheDir;
+    std::wstring logDir;
+    std::wstring shmName;
+};
+
 Renderer g_renderer;
+FrameSource g_frames;
+bool g_visible = true;
+bool g_framesReady = false;
 bool g_shutdownRequested = false;
 HostPaths g_paths;
 HMODULE g_hinst = nullptr;
 
-// ---------------------------------------------------------------------------
-// Raw boot trace (Win32 file I/O only — usable even when the CRT/CEF layer is
-// whatever crashed). Written to <moduleDir>\SentinelUI\logs\boot_trace.txt
-// ---------------------------------------------------------------------------
+}  // namespace sui_host
+
+namespace {
+
+using namespace sui_host;
+
+// Pending helper process.
+HANDLE g_helperProcess = nullptr;
+std::vector<uint8_t> g_dummy;  // (unused; kept for symmetry)
+
+void Trace(const char* what);
+
+}  // namespace
+
+namespace sui_host {
+
+void TraceF(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsprintf_s(buf, _countof(buf), fmt, ap);
+    va_end(ap);
+    Trace(buf);
+}
+
+}  // namespace sui_host
+
 namespace {
 
 HANDLE g_traceFile = INVALID_HANDLE_VALUE;
@@ -38,12 +77,11 @@ HANDLE g_traceFile = INVALID_HANDLE_VALUE;
 void Trace(const char* what) {
     if (g_traceFile == INVALID_HANDLE_VALUE) {
         wchar_t mod[MAX_PATH];
-        HMODULE src = g_hinst ? g_hinst : GetModuleHandleW(L"SentinelUI.asi");
-        GetModuleFileNameW(src ? src : GetModuleHandleW(nullptr), mod, MAX_PATH);
+        HMODULE src = g_hinst ? g_hinst : GetModuleHandleW(nullptr);
+        GetModuleFileNameW(src, mod, MAX_PATH);
         wchar_t* slash = wcsrchr(mod, L'\\');
         if (slash) *slash = 0;
         std::wstring dir = mod + std::wstring(L"\\SentinelUI\\logs");
-        // Multi-level create (CreateDirectoryW is single-level only).
         {
             std::wstring cur;
             for (wchar_t ch : dir) {
@@ -65,20 +103,6 @@ void Trace(const char* what) {
     }
 }
 
-}  // namespace
-
-void TraceF(const char* fmt, ...) {
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsprintf_s(buf, _countof(buf), fmt, ap);
-    va_end(ap);
-    Trace(buf);
-}
-
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
 std::wstring ModuleDir() {
     wchar_t buf[MAX_PATH * 2];
     DWORD n = GetModuleFileNameW(GetModuleHandleW(L"SentinelUI.asi"), buf, MAX_PATH * 2);
@@ -97,9 +121,53 @@ std::string ToUtf8(const std::wstring& w) {
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// Game window discovery + hooks + CEF boot
-// ---------------------------------------------------------------------------
+std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
+
+void StartHelper() {
+    std::wstring cmdline =
+        Quote(g_paths.helperExe) +
+        L" --content=" + Quote(g_paths.contentFile) +
+        L" --size=1280x720" +
+        L" --shm=" + Quote(g_paths.shmName) +
+        L" --logs=" + Quote(g_paths.logDir) +
+        L" --cache=" + Quote(g_paths.cacheDir);
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(g_paths.helperExe.c_str(), &cmdline[0], nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        SUI_LOG_ERROR("CreateProcessW failed for helper (%lu).", GetLastError());
+        return;
+    }
+    g_helperProcess = pi.hProcess;
+    CloseHandle(pi.hThread);
+    SUI_LOG_INFO("Helper process started (pid %lu).", pi.dwProcessId);
+
+    // Wait (bounded) for the helper to create the shared memory mapping.
+    for (int i = 0; i < 50 && !g_shutdownRequested; ++i) {
+        if (g_frames.Open(g_paths.shmName.c_str(), 4096, 2160)) {
+            g_framesReady = true;
+            SUI_LOG_INFO("Shared-memory frame source ready.");
+            return;
+        }
+        Sleep(100);
+    }
+    SUI_LOG_ERROR("Helper shared memory not available within 5s.");
+}
+
+void StopHelper() {
+    g_framesReady = false;
+    g_frames.Close();
+    if (g_helperProcess) {
+        TerminateProcess(g_helperProcess, 0);
+        WaitForSingleObject(g_helperProcess, 2000);
+        CloseHandle(g_helperProcess);
+        g_helperProcess = nullptr;
+        SUI_LOG_INFO("Helper process stopped.");
+    }
+}
+
 struct FindCtx {
     DWORD pid;
     HWND hwnd;
@@ -114,7 +182,7 @@ HWND FindGameWindow() {
         if (hPid != c->pid) return TRUE;
         wchar_t cls[64] = {};
         GetClassNameW(hwnd, cls, 64);
-        if (wcscmp(cls, L"grcWindow") == 0) {   // GTA V window class
+        if (wcscmp(cls, L"grcWindow") == 0) {
             c->hwnd = hwnd;
             return FALSE;
         }
@@ -126,44 +194,31 @@ HWND FindGameWindow() {
 DWORD WINAPI BootThread(LPVOID) {
     Log::Initialize(g_paths.logDir);
     TraceF("boot: log-init done");
-    SUI_LOG_INFO("SentinelUI host loading (API v%d, module dir: %ls).",
-                 SUI_API_VERSION, g_paths.moduleDir.c_str());
-    TraceF("boot: info logged");
+    SUI_LOG_INFO("SentinelUI host loading (module dir: %ls).", g_paths.moduleDir.c_str());
 
-    // Debug escape hatch: skip the game-window wait + hooks and start CEF
-    // directly, so the host can be smoke-tested outside GTA V (HostProbe).
+    // Debug escape hatch for out-of-game smoke tests (HostProbe): no window,
+    // no hooks — just start the helper + open frames.
     char dbg[2] = {0};
-    if (!g_shutdownRequested &&
-        GetEnvironmentVariableA("SENTINELUI_DEBUG_NOWINDOW", dbg, 2) == 1 && dbg[0] == '1') {
-        SUI_LOG_INFO("DEBUG_NOWINDOW=1: skipping window wait + hooks, starting CEF directly.");
-        TraceF("boot: debug path -> starting CEF");
-        if (!g_host.Start(g_paths)) SUI_LOG_ERROR("CEF host failed to start (debug).");
+    if (GetEnvironmentVariableA("SENTINELUI_DEBUG_NOWINDOW", dbg, 2) == 1 && dbg[0] == '1') {
+        SUI_LOG_INFO("DEBUG_NOWINDOW=1: skipping window+hooks, starting helper only.");
+        StartHelper();
         return 0;
     }
 
-    // Game window may still be initializing; wait (bounded).
     HWND gameWindow = nullptr;
     for (int i = 0; i < 300 && !g_shutdownRequested; ++i) {
         gameWindow = FindGameWindow();
         if (gameWindow) break;
         Sleep(250);
     }
-    if (!gameWindow) {
-        SUI_LOG_ERROR("Game window not found within 75s; host aborted.");
-        return 0;
-    }
+    if (!gameWindow) { SUI_LOG_ERROR("Game window not found within 75s; host aborted."); return 0; }
 
-    if (!InstallHooks(gameWindow)) {
-        SUI_LOG_ERROR("Hook installation failed; host aborted.");
-        return 0;
-    }
+    if (!InstallHooks(gameWindow)) { SUI_LOG_ERROR("Hook installation failed."); return 0; }
 
-    if (!g_host.Start(g_paths)) {
-        SUI_LOG_ERROR("CEF host failed to start.");
-        RemoveHooks();
-        return 0;
-    }
-    SUI_LOG_INFO("Host ready. F9 toggle visibility, F10 toggle input capture.");
+    StartHelper();
+    if (!g_framesReady) { SUI_LOG_ERROR("Frames not available; overlay disabled."); }
+
+    SUI_LOG_INFO("Host ready. F9 toggle visibility.");
     return 0;
 }
 
@@ -171,12 +226,12 @@ void StopHost() {
     if (g_shutdownRequested) return;
     g_shutdownRequested = true;
     SUI_LOG_INFO("Shutdown requested.");
-    g_host.Stop();
+    StopHelper();
     RemoveHooks();
     SUI_LOG_INFO("Host stopped.");
 }
 
-}  // namespace sui_host
+}  // namespace
 
 // ---- exported C API ----------------------------------------------------------
 
@@ -184,34 +239,24 @@ extern "C" {
 
 int SuiGetApiVersion(void) { return SUI_API_VERSION; }
 
-void SuiPumpEvents(void) {
-    // P2: drains per-token event queues into the caller (game thread).
-}
+void SuiPumpEvents(void) { /* P2: per-token event queues */ }
 
-void SuiShutdown(void) {
-    sui_host::StopHost();
-}
+void SuiShutdown(void) { StopHost(); }
 
 }  // extern "C"
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinstDLL);
-        sui_host::g_hinst = hinstDLL;
         using namespace sui_host;
+        g_hinst = hinstDLL;
         TraceF("dllmain: attach");
-        g_paths.moduleDir = ModuleDir();                 // <game> root (host lives at root)
+        g_paths.moduleDir = ModuleDir();
+        g_paths.helperExe = g_paths.moduleDir + L"\\SentinelUI_Host.exe";
         g_paths.contentFile = g_paths.moduleDir + L"\\SentinelUI\\content\\p1_demo.html";
-        g_paths.workerExe = g_paths.moduleDir + L"\\SentinelUI_Worker.exe";
         g_paths.cacheDir = g_paths.moduleDir + L"\\SentinelUI\\cache";
         g_paths.logDir = g_paths.moduleDir + L"\\SentinelUI\\logs";
-        g_paths.resourcesDir = g_paths.moduleDir;
-        g_paths.localesDir = g_paths.moduleDir + L"\\locales";
-        g_paths.contentFileUtf8 = ToUtf8(g_paths.contentFile);
-        g_paths.workerExeUtf8 = ToUtf8(g_paths.workerExe);
-        g_paths.cacheDirUtf8 = ToUtf8(g_paths.cacheDir);
-        g_paths.resourcesDirUtf8 = ToUtf8(g_paths.resourcesDir);
-        g_paths.localesDirUtf8 = ToUtf8(g_paths.localesDir);
+        g_paths.shmName = L"Local\\SentinelUI_Frames";
 
         HANDLE h = CreateThread(nullptr, 0, &BootThread, nullptr, 0, nullptr);
         TraceF("dllmain: boot thread created");

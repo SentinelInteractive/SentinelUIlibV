@@ -136,20 +136,6 @@ bool Renderer::EnsureResources(IDXGISwapChain* swapChain) {
     return ready_;
 }
 
-void Renderer::UploadFrame(const std::vector<uint8_t>& bgra, int width, int height) {
-    if (!ready_ || context_ == nullptr || width <= 0 || height <= 0) return;
-    if (bgra.size() < (size_t)width * height * 4) return;
-
-    D3D11_BOX box = {};
-    box.left = 0;
-    box.top = 0;
-    box.right = (UINT)width;
-    box.bottom = (UINT)height;
-    box.front = 0;
-    box.back = 1;
-    context_->UpdateSubresource(frameTex_, 0, &box, bgra.data(), (UINT)width * 4, 0);
-}
-
 void Renderer::DrawFrame(IDXGISwapChain* swapChain) {
 
     ID3D11Texture2D* back = nullptr;
