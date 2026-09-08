@@ -27,3 +27,10 @@ docs/examples/WebUI/**/*.bin
 # ===== Local runtime/game layout (created by packaging scripts) =====
 /SentinelUI/
 /dist/
+
+# ===== Native CEF third-party tree (hundreds of MB) + harness artifacts =====
+native/third_party/
+native/**/build/
+native/harness/harness_cef_cache/
+native/harness/*.ppm
+native/harness/*.yuv
