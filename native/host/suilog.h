@@ -15,8 +15,9 @@ namespace sui_host {
 
 class Log {
 public:
-    // Call once with the absolute logs directory. Safe to call repeatedly.
-    static void Initialize(const std::wstring& logDirectory);
+    // Call once with the absolute logs directory (file name prefix) — safe to call repeatedly.
+    static void Initialize(const std::wstring& logDirectory,
+                           const std::wstring& filePrefix = L"sentinelui_host");
 
     static void Write(const char* level, const char* fmt, ...);
 

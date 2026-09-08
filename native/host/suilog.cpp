@@ -28,7 +28,7 @@ FILE* Log::file_ = nullptr;
 CRITICAL_SECTION Log::cs_;
 bool Log::csInit_ = false;
 
-void Log::Initialize(const std::wstring& logDirectory) {
+void Log::Initialize(const std::wstring& logDirectory, const std::wstring& filePrefix) {
     if (!csInit_) {
         InitializeCriticalSection(&cs_);
         csInit_ = true;
@@ -47,8 +47,8 @@ void Log::Initialize(const std::wstring& logDirectory) {
     struct tm tmNow;
     __time64_t t64 = _time64(nullptr);
     _localtime64_s(&tmNow, &t64);
-    wcsftime(buf, MAX_PATH, L"sentinelui_host_%Y%m%d.log", &tmNow);
-    std::wstring path = dir + L"\\" + buf;
+    wcsftime(buf, MAX_PATH, L"_%Y%m%d.log", &tmNow);
+    std::wstring path = dir + L"\\" + filePrefix + buf;
     // BINARY append mode: the CRT "ccs=UTF-8" flavour produces a wide stream and
     // byte-oriented fprintf on it is undefined (CRT invalid-parameter -> failfast).
     // We write UTF-8 bytes ourselves.
