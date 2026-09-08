@@ -20,16 +20,19 @@ public:
 
     static void Write(const char* level, const char* fmt, ...);
 
-    static void Info(const char* fmt, ...) { WriteV("INFO ", fmt); }
-    static void Warn(const char* fmt, ...) { WriteV("WARN ", fmt); }
-    static void Error(const char* fmt, ...) { WriteV("ERROR", fmt); }
+    static void Info(const char* fmt, ...) {
+        va_list ap; va_start(ap, fmt); Write("INFO ", fmt, ap); va_end(ap);
+    }
+
+    static void Warn(const char* fmt, ...) {
+        va_list ap; va_start(ap, fmt); Write("WARN ", fmt, ap); va_end(ap);
+    }
+
+    static void Error(const char* fmt, ...) {
+        va_list ap; va_start(ap, fmt); Write("ERROR", fmt, ap); va_end(ap);
+    }
 
 private:
-    static void WriteV(const char* level, const char* fmt, ...) {
-        va_list ap; va_start(ap, fmt);
-        Write(level, fmt, ap);
-        va_end(ap);
-    }
     static void Write(const char* level, const char* fmt, va_list ap);
 
     static FILE* file_;

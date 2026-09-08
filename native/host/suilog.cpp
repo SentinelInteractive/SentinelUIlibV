@@ -3,9 +3,26 @@
 #include <wchar.h>
 #include <cstdio>
 #include <cwchar>
+#include <string>
 #include <vector>
 
 namespace sui_host {
+
+namespace {
+// Multi-level directory creation (CreateDirectoryW is single-level only).
+bool EnsureDirectory(const std::wstring& path) {
+    if (path.empty()) return false;
+    std::wstring cur;
+    for (wchar_t ch : path) {
+        cur += ch;
+        if (ch == L'\\' || ch == L'/') {
+            if (cur.size() > 3) CreateDirectoryW(cur.c_str(), nullptr);
+        }
+    }
+    CreateDirectoryW(path.c_str(), nullptr);
+    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+}  // namespace
 
 FILE* Log::file_ = nullptr;
 CRITICAL_SECTION Log::cs_;
@@ -24,7 +41,7 @@ void Log::Initialize(const std::wstring& logDirectory) {
 
     std::wstring dir = logDirectory;
     if (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
-    CreateDirectoryW(dir.c_str(), nullptr);
+    EnsureDirectory(dir);
 
     wchar_t buf[MAX_PATH];
     struct tm tmNow;
@@ -32,7 +49,10 @@ void Log::Initialize(const std::wstring& logDirectory) {
     _localtime64_s(&tmNow, &t64);
     wcsftime(buf, MAX_PATH, L"sentinelui_host_%Y%m%d.log", &tmNow);
     std::wstring path = dir + L"\\" + buf;
-    file_ = _wfopen(path.c_str(), L"a, ccs=UTF-8");
+    // BINARY append mode: the CRT "ccs=UTF-8" flavour produces a wide stream and
+    // byte-oriented fprintf on it is undefined (CRT invalid-parameter -> failfast).
+    // We write UTF-8 bytes ourselves.
+    file_ = _wfopen(path.c_str(), L"ab");
     if (file_) setvbuf(file_, nullptr, _IONBF, 0);
     LeaveCriticalSection(&cs_);
 }
@@ -51,9 +71,11 @@ void Log::Write(const char* level, const char* fmt, va_list ap) {
     std::snprintf(ts, sizeof(ts), "%04d-%02d-%02d %02d:%02d:%02d.%03d",
                   st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 
-    std::fprintf(file_, "[%s] [%s] ", ts, level);
-    std::vfprintf(file_, fmt, ap);
-    std::fprintf(file_, "\n");
+    char body[2048];
+    vsnprintf_s(body, _countof(body), _TRUNCATE, fmt, ap);
+
+    std::string line = "[" + std::string(ts) + "] [" + std::string(level) + "] " + body + "\n";
+    std::fwrite(line.data(), 1, line.size(), file_);
     LeaveCriticalSection(&cs_);
 }
 

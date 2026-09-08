@@ -15,17 +15,70 @@
 
 #include <shellapi.h>
 #include <string>
+#include <cstdio>
+#include <cstdlib>
+#include <cwchar>
 
 namespace sui_host {
+
 CefHost g_host;
 Renderer g_renderer;
-}  // namespace sui_host
+bool g_shutdownRequested = false;
+HostPaths g_paths;
+HMODULE g_hinst = nullptr;
 
+// ---------------------------------------------------------------------------
+// Raw boot trace (Win32 file I/O only — usable even when the CRT/CEF layer is
+// whatever crashed). Written to <moduleDir>\SentinelUI\logs\boot_trace.txt
+// ---------------------------------------------------------------------------
 namespace {
 
-bool g_shutdownRequested = false;
-sui_host::HostPaths g_paths;
+HANDLE g_traceFile = INVALID_HANDLE_VALUE;
 
+void Trace(const char* what) {
+    if (g_traceFile == INVALID_HANDLE_VALUE) {
+        wchar_t mod[MAX_PATH];
+        HMODULE src = g_hinst ? g_hinst : GetModuleHandleW(L"SentinelUI.asi");
+        GetModuleFileNameW(src ? src : GetModuleHandleW(nullptr), mod, MAX_PATH);
+        wchar_t* slash = wcsrchr(mod, L'\\');
+        if (slash) *slash = 0;
+        std::wstring dir = mod + std::wstring(L"\\SentinelUI\\logs");
+        // Multi-level create (CreateDirectoryW is single-level only).
+        {
+            std::wstring cur;
+            for (wchar_t ch : dir) {
+                cur += ch;
+                if (ch == L'\\' || ch == L'/') { if (cur.size() > 3) CreateDirectoryW(cur.c_str(), nullptr); }
+            }
+        }
+        CreateDirectoryW(dir.c_str(), nullptr);
+        std::wstring path = dir + L"\\boot_trace.txt";
+        g_traceFile = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                  OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    }
+    if (g_traceFile != INVALID_HANDLE_VALUE && g_traceFile != nullptr) {
+        char buf[512];
+        int n = wsprintfA(buf, "[%lu] %s\r\n", GetCurrentThreadId(), what);
+        DWORD written = 0;
+        WriteFile(g_traceFile, buf, (DWORD)n, &written, nullptr);
+    }
+}
+
+}  // namespace
+
+void TraceF(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsprintf_s(buf, _countof(buf), fmt, ap);
+    va_end(ap);
+    Trace(buf);
+}
+
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
 std::wstring ModuleDir() {
     wchar_t buf[MAX_PATH * 2];
     DWORD n = GetModuleFileNameW(GetModuleHandleW(L"SentinelUI.asi"), buf, MAX_PATH * 2);
@@ -44,6 +97,9 @@ std::string ToUtf8(const std::wstring& w) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Game window discovery + hooks + CEF boot
+// ---------------------------------------------------------------------------
 struct FindCtx {
     DWORD pid;
     HWND hwnd;
@@ -52,14 +108,14 @@ struct FindCtx {
 HWND FindGameWindow() {
     FindCtx ctx = {GetCurrentProcessId(), nullptr};
     EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
-        FindCtx* ctx = reinterpret_cast<FindCtx*>(lParam);
+        FindCtx* c = reinterpret_cast<FindCtx*>(lParam);
         DWORD hPid = 0;
         GetWindowThreadProcessId(hwnd, &hPid);
-        if (hPid != ctx->pid) return TRUE;
+        if (hPid != c->pid) return TRUE;
         wchar_t cls[64] = {};
         GetClassNameW(hwnd, cls, 64);
         if (wcscmp(cls, L"grcWindow") == 0) {   // GTA V window class
-            ctx->hwnd = hwnd;
+            c->hwnd = hwnd;
             return FALSE;
         }
         return TRUE;
@@ -68,10 +124,22 @@ HWND FindGameWindow() {
 }
 
 DWORD WINAPI BootThread(LPVOID) {
-    using namespace sui_host;
     Log::Initialize(g_paths.logDir);
+    TraceF("boot: log-init done");
     SUI_LOG_INFO("SentinelUI host loading (API v%d, module dir: %ls).",
                  SUI_API_VERSION, g_paths.moduleDir.c_str());
+    TraceF("boot: info logged");
+
+    // Debug escape hatch: skip the game-window wait + hooks and start CEF
+    // directly, so the host can be smoke-tested outside GTA V (HostProbe).
+    char dbg[2] = {0};
+    if (!g_shutdownRequested &&
+        GetEnvironmentVariableA("SENTINELUI_DEBUG_NOWINDOW", dbg, 2) == 1 && dbg[0] == '1') {
+        SUI_LOG_INFO("DEBUG_NOWINDOW=1: skipping window wait + hooks, starting CEF directly.");
+        TraceF("boot: debug path -> starting CEF");
+        if (!g_host.Start(g_paths)) SUI_LOG_ERROR("CEF host failed to start (debug).");
+        return 0;
+    }
 
     // Game window may still be initializing; wait (bounded).
     HWND gameWindow = nullptr;
@@ -103,12 +171,12 @@ void StopHost() {
     if (g_shutdownRequested) return;
     g_shutdownRequested = true;
     SUI_LOG_INFO("Shutdown requested.");
-    sui_host::g_host.Stop();
-    sui_host::RemoveHooks();
+    g_host.Stop();
+    RemoveHooks();
     SUI_LOG_INFO("Host stopped.");
 }
 
-}  // namespace
+}  // namespace sui_host
 
 // ---- exported C API ----------------------------------------------------------
 
@@ -121,7 +189,7 @@ void SuiPumpEvents(void) {
 }
 
 void SuiShutdown(void) {
-    ::StopHost();
+    sui_host::StopHost();
 }
 
 }  // extern "C"
@@ -129,8 +197,9 @@ void SuiShutdown(void) {
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinstDLL);
-
+        sui_host::g_hinst = hinstDLL;
         using namespace sui_host;
+        TraceF("dllmain: attach");
         g_paths.moduleDir = ModuleDir();                 // <game> root (host lives at root)
         g_paths.contentFile = g_paths.moduleDir + L"\\SentinelUI\\content\\p1_demo.html";
         g_paths.workerExe = g_paths.moduleDir + L"\\SentinelUI_Worker.exe";
@@ -145,6 +214,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
         g_paths.localesDirUtf8 = ToUtf8(g_paths.localesDir);
 
         HANDLE h = CreateThread(nullptr, 0, &BootThread, nullptr, 0, nullptr);
+        TraceF("dllmain: boot thread created");
         if (h) CloseHandle(h);
     }
     return TRUE;

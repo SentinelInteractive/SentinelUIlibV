@@ -11,6 +11,9 @@
 
 namespace sui_host {
 
+// Debug trace defined in host.cpp (raw Win32 file logging; CRT may be unavailable).
+void TraceF(const char* fmt, ...);
+
 // Reference-counted CEF app living on the dedicated CEF thread. Implements all
 // interfaces the host needs (CefApp for switch control, CefClient sinks for
 // rendering/lifecycle/display/load). Defined here (non-anonymous) so the host
@@ -179,26 +182,47 @@ bool CefHost::TakeFrame(Frame& out) {
 }
 
 void CefHost::ThreadMain(const HostPaths& paths) {
+    TraceF("ThreadMain: enter");
     CefMainArgs mainArgs(GetModuleHandleW(nullptr));
-
+    TraceF("[A] CefMainArgs ok");
     CefSettings settings;
-    settings.no_sandbox = true;
-    settings.windowless_rendering_enabled = true;
-    settings.log_severity = LOGSEVERITY_WARNING;
-    CefString(&settings.root_cache_path) = paths.cacheDirUtf8;
-    CefString(&settings.browser_subprocess_path) = paths.workerExeUtf8;
-    // Deterministic resource/locale resolution (no search-order guessing).
-    CefString(&settings.resources_dir_path) = paths.resourcesDirUtf8;
-    CefString(&settings.locales_dir_path) = paths.localesDirUtf8;
+    TraceF("[B] CefSettings ctor ok");
+    __try {
+        settings.no_sandbox = true;
+        settings.windowless_rendering_enabled = true;
+        settings.log_severity = LOGSEVERITY_WARNING;
+        TraceF("[C] scalar settings ok");
+        CefString(&settings.root_cache_path) = paths.cacheDirUtf8;
+        TraceF("[D] root_cache CefString ok");
+        CefString(&settings.browser_subprocess_path) = paths.workerExeUtf8;
+        TraceF("[E] subprocess CefString ok");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        TraceF("[!] SEH in settings block: 0x%08X", GetExceptionCode());
+        state_ = State::Stopped;
+        return;
+    }
 
     CefRefPtr<SuiApp> suiApp(new SuiApp(this));
     CefRefPtr<CefApp> app = suiApp;
+    TraceF("[F] app constructed");
 
-    if (!CefInitialize(mainArgs, settings, app.get(), nullptr)) {
+    // Debug: is libcef actually resolvable from this module? (delayload search)
+    TraceF("libcef handle: %p", (void*)GetModuleHandleW(L"libcef.dll"));
+    TraceF("chrome_elf handle: %p", (void*)GetModuleHandleW(L"chrome_elf.dll"));
+
+    bool initOk = false;
+    __try {
+        initOk = !!CefInitialize(mainArgs, settings, app.get(), nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        TraceF("SEH exception during CefInitialize: 0x%08X", GetExceptionCode());
+        initOk = false;
+    }
+    if (!initOk) {
         SUI_LOG_ERROR("CefInitialize failed.");
         state_ = State::Stopped;
         return;
     }
+    TraceF("CefInitialize returned true");
     SUI_LOG_INFO("CefInitialize OK (dedicated thread).");
 
     CefWindowInfo info;
@@ -235,10 +259,12 @@ void CefHost::ThreadMain(const HostPaths& paths) {
     }
 
     // Shutdown sequence (CEF thread).
+    SUI_LOG_INFO("Shutdown: closing browser...");
     if (browser_) {
         browser_->GetHost()->CloseBrowser(true);
         browser_ = nullptr;
     }
+    SUI_LOG_INFO("Shutdown: browser closed, CefShutdown...");
     CefShutdown();
     state_ = State::Stopped;
     SUI_LOG_INFO("CEF shut down.");
@@ -247,6 +273,7 @@ void CefHost::ThreadMain(const HostPaths& paths) {
 bool CefHost::Start(const HostPaths& paths) {
     if (state_ != State::Idle) return false;
     paths_ = paths;
+    TraceF("host.Start: creating CEF thread");
     thread_ = std::thread([this, paths]() { ThreadMain(paths); });
     return true;
 }
@@ -254,7 +281,9 @@ bool CefHost::Start(const HostPaths& paths) {
 void CefHost::Stop() {
     if (state_ == State::Idle || state_ == State::Stopped) return;
     state_ = State::Stopping;
+    SUI_LOG_INFO("Stop: joining CEF thread...");
     if (thread_.joinable()) thread_.join();
+    SUI_LOG_INFO("Stop: CEF thread joined.");
 }
 
 }  // namespace sui_host

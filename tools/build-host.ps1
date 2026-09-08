@@ -33,7 +33,7 @@ call "$vcvars" >nul
 if errorlevel 1 exit /b 1
 set "CEF_ROOT=$cef"
 set "PATH=$ninjaDir;%PATH%"
-cmake -G Ninja -DCMAKE_BUILD_TYPE=$Config -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl "-DCMAKE_LINKER=$linkPath" -B "$buildDir" -S "$repo\native\host"
+cmake -G Ninja -DCMAKE_BUILD_TYPE=$Config -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl "-DCMAKE_LINKER=$linkPath" -DUSE_SANDBOX=OFF -B "$buildDir" -S "$repo\native\host"
 if errorlevel 1 exit /b 1
 cmake --build "$buildDir"
 exit /b %errorlevel%
