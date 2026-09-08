@@ -140,13 +140,17 @@ void Renderer::DrawFrame(IDXGISwapChain* swapChain) {
 
     ID3D11Texture2D* back = nullptr;
     if (FAILED(swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&back)) || !back) return;
+    D3D11_TEXTURE2D_DESC backDesc;
+    back->GetDesc(&backDesc);
 
     ID3D11RenderTargetView* rtv = nullptr;
     device_->CreateRenderTargetView(back, nullptr, &rtv);
     back->Release();
     if (!rtv) return;
 
-    D3D11_VIEWPORT vp = {0, 0, (float)texWidth_, (float)texHeight_, 0, 1};
+    // Full-window rendering: the viewport must match the BACKBUFFER, so the
+    // layer texture (browser view size) stretches across the whole screen.
+    D3D11_VIEWPORT vp = {0, 0, (float)backDesc.Width, (float)backDesc.Height, 0, 1};
 
     ID3D11ShaderResourceView* srv = nullptr;
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};

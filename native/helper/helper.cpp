@@ -23,12 +23,17 @@ std::wstring GetArg(const std::wstring& cmdline, const std::wstring& key) {
     auto pos = cmdline.find(pref);
     if (pos == std::wstring::npos) return L"";
     size_t start = pos + pref.size();
-    size_t end = cmdline.find(L' ', start);
-    if (end == std::wstring::npos) end = cmdline.size();
-    std::wstring val = cmdline.substr(start, end - start);
-    // strip surrounding quotes if any
-    if (val.size() >= 2 && val.front() == L'"' && val.back() == L'"') val = val.substr(1, val.size() - 2);
-    return val;
+    size_t end;
+    if (start < cmdline.size() && cmdline[start] == L'"') {
+        // Quoted value: advance to the closing quote (handles spaces in paths).
+        start++;
+        end = cmdline.find(L'"', start);
+        if (end == std::wstring::npos) end = cmdline.size();
+    } else {
+        end = cmdline.find(L' ', start);
+        if (end == std::wstring::npos) end = cmdline.size();
+    }
+    return cmdline.substr(start, end - start);
 }
 
 bool HasFlag(const std::wstring& cmdline, const std::wstring& flag) {
