@@ -131,14 +131,18 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
         DisableThreadLibraryCalls(hinstDLL);
 
         using namespace sui_host;
-        g_paths.moduleDir = ModuleDir();
-        g_paths.contentFile = g_paths.moduleDir + L"\\content\\p1_demo.html";
+        g_paths.moduleDir = ModuleDir();                 // <game> root (host lives at root)
+        g_paths.contentFile = g_paths.moduleDir + L"\\SentinelUI\\content\\p1_demo.html";
         g_paths.workerExe = g_paths.moduleDir + L"\\SentinelUI_Worker.exe";
-        g_paths.cacheDir = g_paths.moduleDir + L"\\cache";
-        g_paths.logDir = g_paths.moduleDir + L"\\logs";
+        g_paths.cacheDir = g_paths.moduleDir + L"\\SentinelUI\\cache";
+        g_paths.logDir = g_paths.moduleDir + L"\\SentinelUI\\logs";
+        g_paths.resourcesDir = g_paths.moduleDir;
+        g_paths.localesDir = g_paths.moduleDir + L"\\locales";
         g_paths.contentFileUtf8 = ToUtf8(g_paths.contentFile);
         g_paths.workerExeUtf8 = ToUtf8(g_paths.workerExe);
         g_paths.cacheDirUtf8 = ToUtf8(g_paths.cacheDir);
+        g_paths.resourcesDirUtf8 = ToUtf8(g_paths.resourcesDir);
+        g_paths.localesDirUtf8 = ToUtf8(g_paths.localesDir);
 
         HANDLE h = CreateThread(nullptr, 0, &BootThread, nullptr, 0, nullptr);
         if (h) CloseHandle(h);

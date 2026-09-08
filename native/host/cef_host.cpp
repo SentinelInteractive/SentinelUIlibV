@@ -187,6 +187,9 @@ void CefHost::ThreadMain(const HostPaths& paths) {
     settings.log_severity = LOGSEVERITY_WARNING;
     CefString(&settings.root_cache_path) = paths.cacheDirUtf8;
     CefString(&settings.browser_subprocess_path) = paths.workerExeUtf8;
+    // Deterministic resource/locale resolution (no search-order guessing).
+    CefString(&settings.resources_dir_path) = paths.resourcesDirUtf8;
+    CefString(&settings.locales_dir_path) = paths.localesDirUtf8;
 
     CefRefPtr<SuiApp> suiApp(new SuiApp(this));
     CefRefPtr<CefApp> app = suiApp;

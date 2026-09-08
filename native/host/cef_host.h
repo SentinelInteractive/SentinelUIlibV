@@ -27,15 +27,19 @@ namespace sui_host {
 
 // Absolute paths resolved at startup (module-relative), so CEF finds its runtime.
 struct HostPaths {
-    std::wstring moduleDir;      // .../SentinelUI (module directory)
-    std::wstring contentFile;    // .../content/p1_demo.html (loaded at P1)
-    std::wstring workerExe;      // .../SentinelUI_Worker.exe
-    std::wstring cacheDir;       // .../cache
-    std::wstring logDir;         // .../logs
+    std::wstring moduleDir;      // <game> root (host module directory)
+    std::wstring contentFile;    // <game>/SentinelUI/content/p1_demo.html
+    std::wstring workerExe;      // <game>/SentinelUI_Worker.exe
+    std::wstring cacheDir;       // <game>/SentinelUI/cache
+    std::wstring logDir;         // <game>/SentinelUI/logs
+    std::wstring resourcesDir;   // <game> (CEF .pak files sit next to libcef)
+    std::wstring localesDir;     // <game>/locales
     // CEF expects UTF-8/ASCII paths; keep narrow copies.
     std::string contentFileUtf8;
     std::string workerExeUtf8;
     std::string cacheDirUtf8;
+    std::string resourcesDirUtf8;
+    std::string localesDirUtf8;
 };
 
 struct Frame {
