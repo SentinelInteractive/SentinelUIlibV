@@ -16,6 +16,40 @@ namespace SentinelUI.Bootstrap
     {
         private static GameFiber _pumpFiber;
         private static volatile bool _running;
+        private static System.Reflection.Assembly _apiAssembly;
+
+        // RPH loads each plugin into its own AppDomain whose probing path is the
+        // GAME ROOT, not the plugin's folder. SentinelUI.API.dll may therefore
+        // not resolve without help — resolve it explicitly from the known locations.
+        static Bootstrap()
+        {
+            AppDomain.CurrentDomain.AssemblyResolve += (s, e) =>
+            {
+                var name = new System.Reflection.AssemblyName(e.Name).Name;
+                if (!string.Equals(name, "SentinelUI.API", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                if (_apiAssembly != null) return _apiAssembly;
+
+                var pluginDir = Path.GetDirectoryName(typeof(Bootstrap).Assembly.Location);
+                string[] candidates =
+                {
+                    Path.Combine(pluginDir ?? "", "SentinelUI.API.dll"),
+                    Path.Combine(pluginDir ?? "", "..", "SentinelUI.API.dll"),
+                    Path.Combine(Environment.CurrentDirectory, "SentinelUI.API.dll"),
+                    Path.Combine(Environment.CurrentDirectory, "SentinelUI", "SentinelUI.API.dll"),
+                };
+                foreach (var candidate in candidates)
+                {
+                    try
+                    {
+                        if (File.Exists(candidate))
+                            return _apiAssembly = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(candidate));
+                    }
+                    catch { /* try next candidate */ }
+                }
+                return null;
+            };
+        }
 
         /// <summary>Entry point, invoked by RPH on the game thread at plugin load.</summary>
         public static void Main()
@@ -49,24 +83,32 @@ namespace SentinelUI.Bootstrap
             }
         }
 
-        /// <summary>Exit point, invoked by RPH on unload/shutdown. Runs on the game thread.</summary>
+        /// <summary>Exit point, invoked by RPH on unload/shutdown. Runs on the game thread.
+        /// Everything here must be exception-safe — RPH reports but does not contain failures.</summary>
         public static void OnUnload(bool isTerminating)
         {
-            _running = false;
-
-            if (_pumpFiber != null && _pumpFiber.IsAlive)
+            try
             {
-                try { _pumpFiber.Abort(); } catch { /* fiber already gone */ }
-                _pumpFiber = null;
-            }
+                _running = false;
 
-            // Graceful host shutdown — NEVER inside DllMain/PROCESS_DETACH; this path is safe.
-            if (SentinelUI.Sui.HostAvailable)
-            {
-                Game.LogTrivial("[SentinelUI] Shutting down host...");
-                SentinelUI.Sui.Shutdown();
+                if (_pumpFiber != null && _pumpFiber.IsAlive)
+                {
+                    try { _pumpFiber.Abort(); } catch { /* fiber already gone */ }
+                    _pumpFiber = null;
+                }
+
+                // Graceful host shutdown — NEVER inside DllMain/PROCESS_DETACH; this path is safe.
+                if (SentinelUI.Sui.HostAvailable)
+                {
+                    Game.LogTrivial("[SentinelUI] Shutting down host...");
+                    SentinelUI.Sui.Shutdown();
+                }
+                Game.LogTrivial("[SentinelUI] Bootstrap unloaded.");
             }
-            Game.LogTrivial("[SentinelUI] Bootstrap unloaded.");
+            catch (Exception ex)
+            {
+                Game.LogTrivial("[SentinelUI] OnUnload failed (non-fatal): " + ex);
+            }
         }
 
         private static void StartPump()

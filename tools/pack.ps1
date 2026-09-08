@@ -60,11 +60,14 @@ if (Test-Path $cefLicense) { Copy-Item $cefLicense (Join-Path $suiDir "LICENSE_C
 
 # ---- managed plugin (RPH auto-load) ----
 $managedOut = Join-Path $repo "managed\SentinelUI.Bootstrap\bin\$ManagedConfig"
+# Bootstrap + API into Plugins\; API additionally at game root (RPH plugin domains
+# probe the game root — the failure mode seen in the P1 first run).
 foreach ($file in @("SentinelUI.Bootstrap.dll", "SentinelUI.API.dll")) {
     $src = Join-Path $managedOut $file
     if (-not (Test-Path $src)) { throw "Missing managed output: $src" }
     Copy-Item $src $pluginsDir -Force
 }
+Copy-Item (Join-Path $managedOut "SentinelUI.API.dll") (Join-Path $GameDir "SentinelUI.API.dll") -Force
 
 Write-Host "[pack] DONE." -ForegroundColor Green
 Write-Host ""
