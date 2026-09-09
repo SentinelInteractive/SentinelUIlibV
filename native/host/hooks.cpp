@@ -47,12 +47,20 @@ ResizeFn g_origResize = nullptr;
 
 IDXGISwapChain* g_swapChain = nullptr;
 bool g_viewportSent = false;
+std::atomic<int> g_lastIpcEpoch{0};
 
+// Send the helper viewport on first Present, on every resize, and again after a
+// helper reconnect (the new helper process starts at its default 1280x720).
 void SyncViewport() {
-    if (g_viewportSent || !g_renderer.ready()) return;
+    if (!g_renderer.ready()) return;
+    int epoch = IpcConnectionEpoch();
+    if (g_viewportSent && epoch == g_lastIpcEpoch.load()) return;
+    g_viewportSent = true;
+    g_lastIpcEpoch.store(epoch);
     SendCommand(std::string("V") + std::to_string(g_renderer.width()) + " " +
                 std::to_string(g_renderer.height()) + "\n");
-    g_viewportSent = true;
+    SUI_LOG_INFO("viewport sync -> %dx%d (ipc epoch %d)", g_renderer.width(),
+                 g_renderer.height(), epoch);
 }
 
 void ToggleHotkeys(WPARAM wParam, LPARAM lParam) {

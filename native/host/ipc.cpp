@@ -1,4 +1,14 @@
 // SentinelUI ASI — IPC server implementation.
+//
+// Transport lesson (verified offline + in-game): named-pipe I/O must use real
+// OVERLAPPED structures on the server handle. Blocking ReadFile/WriteFile
+// without OVERLAPPED on a FILE_FLAG_OVERLAPPED handle "may incorrectly report
+// completion" and was observed to leave bytes stuck in the pipe after the first
+// exchange. A synchronous server handle with a concurrent writer thread also
+// stalls its blocking reads. Hence: every operation here is OVERLAPPED with an
+// event and a bounded wait, and every wait polls g_stop so shutdown can always
+// join the threads (a thread blocked in ConnectNamedPipe/ReadFile without an
+// OVERLAPPED cannot be released by CloseHandle from another thread — verified).
 
 #include "ipc.h"
 #include "suilog.h"
@@ -13,7 +23,10 @@ namespace sui_host {
 
 namespace {
 
-HANDLE g_pipe = INVALID_HANDLE_VALUE;
+// Pipe handle shared between the accept thread (writes it) and the writer/stop
+// paths (read it). Must be atomic: the writer flushes ASI->helper commands on a
+// separate thread that may race a reconnect.
+std::atomic<HANDLE> g_pipe{INVALID_HANDLE_VALUE};
 std::thread g_thread;
 std::thread g_writerThread;
 std::atomic<bool> g_stop{false};
@@ -21,55 +34,149 @@ std::atomic<bool> g_stop{false};
 std::mutex g_inMutex;
 std::vector<std::string> g_inQueue;    // helper->ASI events (read by pump)
 std::mutex g_outMutex;
-std::vector<std::string> g_outQueue;   // ASI->helper commands (written by server thread)
+std::vector<std::string> g_outQueue;   // ASI->helper commands (drained by writer thread)
+std::atomic<int> g_epoch{0};           // bumped on every helper connect
 
 void (*g_sink)(const char*) = nullptr;
 
-void FlushOut() {
+HANDLE CreateWaiter(HANDLE* outEvent) {
+    HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (outEvent) *outEvent = ev;
+    return ev;
+}
+
+// Log the command type once per session (keeps the hot M path quiet).
+void LogFirstQueued(const std::string& line) {
+    if (line.empty()) return;
+    unsigned char c = (unsigned char)line[0];
+    static bool s_seen[256] = {};
+    if (s_seen[c]) return;
+    s_seen[c] = true;
+    std::string body = line;
+    if (!body.empty() && body.back() == '\n') body.pop_back();
+    SUI_LOG_INFO("cmd queued: first '%c' (%u bytes): %s", (char)c, (unsigned)line.size(),
+                 body.c_str());
+}
+
+// Requeue [it, end) at the FRONT of the out queue (order preserved) so a
+// reconnect can deliver them. Returns true when anything was requeued.
+bool Requeue(const std::vector<std::string>::const_iterator& it,
+             const std::vector<std::string>& batch) {
+    std::lock_guard<std::mutex> lock(g_outMutex);
+    if (it == batch.end()) return false;
+    g_outQueue.insert(g_outQueue.begin(), it, batch.end());
+    return true;
+}
+
+void FlushOut(HANDLE pipe) {
+    // Never drop commands just because the helper is (re)connecting.
     std::vector<std::string> batch;
     {
         std::lock_guard<std::mutex> lock(g_outMutex);
         if (g_outQueue.empty()) return;
         batch.swap(g_outQueue);
     }
-    if (g_pipe == INVALID_HANDLE_VALUE) return;
-    for (const auto& line : batch) {
-        DWORD written = 0;
-        WriteFile(g_pipe, line.data(), (DWORD)line.size(), &written, nullptr);
+
+    static HANDLE s_ev = CreateWaiter(nullptr);
+    static bool s_firstFlush = true;
+    if (s_firstFlush) {
+        s_firstFlush = false;
+        size_t bytes = 0;
+        for (const auto& line : batch) bytes += line.size();
+        SUI_LOG_INFO("IPC: first outbound flush (%u lines, %u bytes).",
+                     (unsigned)batch.size(), (unsigned)bytes);
     }
-    FlushFileBuffers(g_pipe);
+
+    OVERLAPPED wo = {};
+    wo.hEvent = s_ev;
+    for (auto it = batch.begin(); it != batch.end(); ++it) {
+        DWORD written = 0;
+        const std::string& line = *it;
+        if (!WriteFile(pipe, line.data(), (DWORD)line.size(), &written, &wo)) {
+            DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                if (WaitForSingleObject(wo.hEvent, 2000) == WAIT_OBJECT_0) {
+                    if (GetOverlappedResult(pipe, &wo, &written, FALSE)) continue;
+                    err = GetLastError();
+                }
+            }
+            static std::atomic<DWORD> s_lastErr{0};
+            if (s_lastErr.exchange(err) != err)
+                SUI_LOG_ERROR("IPC write failed (%lu) — command requeued for reconnect.", err);
+            CancelIoEx(pipe, &wo);
+            GetOverlappedResult(pipe, &wo, &written, FALSE);
+            Requeue(it, batch);
+            break;
+        }
+    }
 }
 
 void AcceptLoop() {
     while (!g_stop) {
-        // One connection at a time; reconnect when the helper disappears.
-        g_pipe = CreateNamedPipeW(L"\\\\.\\pipe\\SentinelUI",
-                                  PIPE_ACCESS_DUPLEX,
-                                  PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                                  PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, nullptr);
-        if (g_pipe == INVALID_HANDLE_VALUE) {
+        // One connection at a time; recreate + reconnect when the helper drops.
+        // Server handle is overlapped: every I/O op below passes a real
+        // OVERLAPPED, and every wait polls g_stop (bounded), so shutdown can
+        // always join this thread.
+        HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\SentinelUI",
+                                       PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                                       PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, nullptr);
+        if (pipe == INVALID_HANDLE_VALUE) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
             continue;
         }
-        if (!ConnectNamedPipe(g_pipe, nullptr) &&
-            GetLastError() != ERROR_PIPE_CONNECTED) {
-            CloseHandle(g_pipe);
-            g_pipe = INVALID_HANDLE_VALUE;
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        HANDLE coEv = CreateWaiter(nullptr);
+        OVERLAPPED co = {};
+        co.hEvent = coEv;
+
+        bool connected = false;
+        for (;;) {
+            if (g_stop) break;
+            if (ConnectNamedPipe(pipe, &co)) { connected = true; break; }
+            DWORD err = GetLastError();
+            if (err == ERROR_PIPE_CONNECTED) { connected = true; break; }  // raced in
+            if (err != ERROR_IO_PENDING) break;                            // unusable instance
+            if (WaitForSingleObject(co.hEvent, 250) == WAIT_OBJECT_0) {
+                DWORD n = 0;
+                connected = GetOverlappedResult(pipe, &co, &n, FALSE) != FALSE;
+                break;
+            }
+        }
+        if (g_stop || !connected) {
+            if (pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);
+            CloseHandle(coEv);
             continue;
         }
+        CloseHandle(coEv);
+
+        g_pipe.store(pipe);
+        ++g_epoch;
         SUI_LOG_INFO("IPC: helper connected.");
 
+        // Event loop: overlapped reads with a bounded wait (250ms) so g_stop and
+        // disconnects are always observed.
+        HANDLE roEv = CreateWaiter(nullptr);
+        OVERLAPPED ro = {};
+        ro.hEvent = roEv;
         std::string acc;
         char buf[4096];
-        while (!g_stop) {
+        bool broken = false;
+        for (;;) {
+            if (g_stop) break;
             DWORD n = 0;
-            // May block until the helper writes — fine; outbound commands are
-            // flushed by the dedicated writer thread.
-            if (!ReadFile(g_pipe, buf, sizeof(buf), &n, nullptr) || n == 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                continue;
+            if (!ReadFile(pipe, buf, sizeof(buf), &n, &ro)) {
+                DWORD err = GetLastError();
+                if (err == ERROR_IO_PENDING) {
+                    DWORD w = WaitForSingleObject(ro.hEvent, 250);
+                    if (w == WAIT_TIMEOUT) continue;       // connected; keep waiting
+                    if (w != WAIT_OBJECT_0) { broken = true; break; }
+                    if (!GetOverlappedResult(pipe, &ro, &n, FALSE)) { broken = true; break; }
+                } else {
+                    broken = true;                          // broken pipe / other error
+                    break;
+                }
             }
+            if (n == 0) continue;
             acc.append(buf, n);
             size_t nl;
             while ((nl = acc.find('\n')) != std::string::npos) {
@@ -81,18 +188,21 @@ void AcceptLoop() {
                     g_inQueue.push_back(line);
                 }
                 static int s = 0;
-                if (s++ == 0) SUI_LOG_INFO("IPC: first event recv (%u bytes)", (unsigned)line.size());
+                if (s++ == 0)
+                    SUI_LOG_INFO("IPC: first event recv (%u bytes)", (unsigned)line.size());
             }
         }
-        CloseHandle(g_pipe);
-        g_pipe = INVALID_HANDLE_VALUE;
+        CloseHandle(roEv);
+        g_pipe.store(INVALID_HANDLE_VALUE);
+        if (broken) CloseHandle(pipe);
         SUI_LOG_INFO("IPC: helper disconnected.");
     }
 }
 
 void WriterLoop() {
     while (!g_stop) {
-        FlushOut();
+        HANDLE pipe = g_pipe.load();
+        if (pipe != INVALID_HANDLE_VALUE) FlushOut(pipe);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
@@ -108,9 +218,10 @@ bool StartIpcServer() {
 
 void StopIpcServer() {
     g_stop = true;
-    if (g_pipe != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_pipe);
-        g_pipe = INVALID_HANDLE_VALUE;
+    HANDLE pipe = g_pipe.exchange(INVALID_HANDLE_VALUE);
+    if (pipe != INVALID_HANDLE_VALUE) {
+        CancelIoEx(pipe, nullptr);
+        CloseHandle(pipe);
     }
     if (g_thread.joinable()) g_thread.join();
     if (g_writerThread.joinable()) g_writerThread.join();
@@ -118,8 +229,11 @@ void StopIpcServer() {
 
 void SendCommand(const std::string& line) {
     std::lock_guard<std::mutex> lock(g_outMutex);
+    LogFirstQueued(line);
     g_outQueue.push_back(line);
 }
+
+int IpcConnectionEpoch(void) { return g_epoch.load(); }
 
 bool EventQueuePop(std::string& out) {
     std::lock_guard<std::mutex> lock(g_inMutex);

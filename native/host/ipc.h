@@ -17,6 +17,10 @@ void StopIpcServer();
 // Queue an ASI->helper command line (thread-safe; flushed by the server thread).
 void SendCommand(const std::string& line);
 
+// Monotonic helper-connection counter; increments every time a helper connects.
+// Lets hook code re-send state (viewport) after a helper restart.
+int IpcConnectionEpoch(void);
+
 // Pop the oldest helper->ASI event line (game thread; SuiPumpEvents).
 bool EventQueuePop(std::string& out);
 

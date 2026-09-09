@@ -38,6 +38,14 @@ bool ParseLenBody(const std::string& line, size_t pos, std::string& out) {
 
 void OnIpcCommand(const std::string& line) {
     if (!g_appInstance || line.empty()) return;
+    // One-shot per command type so the command path is visible in logs without
+    // spamming the hot M path.
+    static bool s_seen[256] = {};
+    unsigned char c = (unsigned char)line[0];
+    if (!s_seen[c]) {
+        s_seen[c] = true;
+        SUI_LOG_INFO("cmd recv: first '%c' (%u bytes)", (char)c, (unsigned)line.size());
+    }
     switch (line[0]) {
         case 'S': g_appInstance->SetVisible(true); break;
         case 'H': g_appInstance->SetVisible(false); break;

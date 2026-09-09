@@ -96,20 +96,30 @@ namespace SentinelUI.HostProbe
                 {
                     layer?.SetVisible(true);
                     layer?.SetFocus(true, true);
-                    layer?.ExecuteJs("document.title='probe';");
+                    // Command-path assertion: ExecuteJs must reach the helper,
+                    // run in the page, and come back as a console event echo.
+                    layer?.ExecuteJs("console.log('probe-ping');");
                     layer?.Send(new { tag = "hello" });
                     const int deadlineMs = 6000;
                     var start = Environment.TickCount;
                     while (Environment.TickCount - start < deadlineMs)
                     {
                         Sui.Pump();
-                        lock (events) { if (events.Count > 0) break; }
+                        lock (events)
+                        {
+                            if (events.Exists(ev => ev.StartsWith("console|", StringComparison.Ordinal)))
+                                break;   // J reached the page and echoed back
+                        }
                         System.Threading.Thread.Sleep(50);
                     }
                     lock (events)
                     {
                         Check(events.Count > 0, "events delivered from helper via pump (" + events.Count + ")");
-                        if (events.Count > 0) Console.WriteLine("  sample event: " + events[0]);
+                        foreach (var ev in events) Console.WriteLine("    event: " + ev);
+                        bool echo = false;
+                        foreach (var ev in events)
+                            if (ev.IndexOf("|console:probe-ping", StringComparison.Ordinal) >= 0) { echo = true; break; }
+                        Check(echo, "command path OK: ExecuteJs -> console event echo claims the J command reached the page");
                     }
                 }
                 finally { Sui.MessageReceived -= handler; layer?.Close(); }

@@ -25,6 +25,21 @@ std::vector<std::string> g_outQueue;
 // Called on the reader thread for every command line received.
 void (*g_onCommand)(const std::string&) = nullptr;
 
+// OVERLAPPED write helper: WriteFile with lpOverlapped=NULL on an overlapped
+// handle is documented to misreport completion and left events stuck in the
+// pipe in practice — always pass a real OVERLAPPED + event here.
+void WriteLineBlocking(HANDLE pipe, const std::string& line, OVERLAPPED& wo) {
+    DWORD written = 0;
+    if (WriteFile(pipe, line.data(), (DWORD)line.size(), &written, &wo)) return;
+    if (GetLastError() != ERROR_IO_PENDING) return;
+    if (WaitForSingleObject(wo.hEvent, 2000) == WAIT_OBJECT_0) {
+        GetOverlappedResult(pipe, &wo, &written, FALSE);
+        return;
+    }
+    CancelIoEx(pipe, &wo);
+    GetOverlappedResult(pipe, &wo, &written, FALSE);
+}
+
 void FlushOut() {
     std::vector<std::string> batch;
     {
@@ -33,35 +48,69 @@ void FlushOut() {
         batch.swap(g_outQueue);
     }
     if (g_pipe == INVALID_HANDLE_VALUE) return;
+    static HANDLE s_ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    static OVERLAPPED s_wo = {};     // single writer thread: safe to reuse
+    s_wo.hEvent = s_ev;
     for (const auto& line : batch) {
-        DWORD written = 0;
         static int s = 0;
         if (s++ == 0) SUI_LOG_INFO("IPC: first flush (%u bytes)", (unsigned)line.size());
-        WriteFile(g_pipe, line.data(), (DWORD)line.size(), &written, nullptr);
+        WriteLineBlocking(g_pipe, line, s_wo);
     }
-    FlushFileBuffers(g_pipe);
+}
+
+void ProcessLines(std::string& acc) {
+    size_t nl;
+    while ((nl = acc.find('\n')) != std::string::npos) {
+        std::string line = acc.substr(0, nl);
+        acc.erase(0, nl + 1);
+        if (line.empty()) continue;
+        if (g_onCommand) g_onCommand(line);
+    }
 }
 
 void ReaderLoop() {
+    // Real OVERLAPPED read with a bounded wait: ReadFile with lpOverlapped=NULL
+    // on an overlapped handle is documented to misreport completion and was
+    // observed to leave commands sitting in the pipe (in-game + probe flakes).
     std::string acc;
     char buf[4096];
+    OVERLAPPED ov = {};
+    ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    bool pending = false;
     while (!g_stop) {
+        if (!pending) {
+            DWORD n = 0;
+            if (ReadFile(g_pipe, buf, sizeof(buf), &n, &ov)) {
+                if (n > 0) {
+                    acc.append(buf, n);
+                    ProcessLines(acc);
+                }
+                continue;  // completed synchronously; re-issue
+            }
+            DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                pending = true;
+            } else {
+                // Disconnected or transient failure: retry (bounded below by g_stop).
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                continue;
+            }
+        }
+        DWORD w = WaitForSingleObject(ov.hEvent, 200);
+        if (w == WAIT_TIMEOUT) continue;   // still connected; keep waiting
+        pending = false;
         DWORD n = 0;
-        // The reader may block waiting for commands — that is fine: outbound
-        // events are flushed by the dedicated writer thread below.
-        if (!ReadFile(g_pipe, buf, sizeof(buf), &n, nullptr) || n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (!GetOverlappedResult(g_pipe, &ov, &n, FALSE)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));  // broken pipe
             continue;
         }
-        acc.append(buf, n);
-        size_t nl;
-        while ((nl = acc.find('\n')) != std::string::npos) {
-            std::string line = acc.substr(0, nl);
-            acc.erase(0, nl + 1);
-            if (line.empty()) continue;
-            if (g_onCommand) g_onCommand(line);
+        if (n > 0) {
+            acc.append(buf, n);
+            ProcessLines(acc);
         }
     }
+    CancelIoEx(g_pipe, &ov);
+    CloseHandle(ov.hEvent);
 }
 
 void WriterLoop() {
@@ -85,6 +134,11 @@ void IpcSendEvent(const std::string& utf8Body) {
 std::wstring StartIpc(const std::wstring& pipeName) {
     g_stop = false;
     // Reconnect loop: the ASI creates the pipe before spawning us, but retry anyway.
+    // NOTE: overlapped handle is REQUIRED here: the reader thread waits for
+    // commands while the dedicated writer thread writes on the same duplex
+    // handle. On a synchronous handle a concurrent blocking write CANCELS the
+    // outstanding read (verified experimentally) and the command path dies.
+    // Both loops pass real OVERLAPPED structs (see ReaderLoop/WriteLineBlocking).
     for (int i = 0; i < 100 && g_pipe == INVALID_HANDLE_VALUE && !g_stop; ++i) {
         g_pipe = CreateFileW(pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
