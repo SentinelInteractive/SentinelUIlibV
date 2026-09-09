@@ -47,7 +47,7 @@ void OnIpcCommand(const std::string& line) {
             g_appInstance->SetFocused(k, m);
             break;
         }
-        case 'J': { std::string js; if (ParseLenBody(line, 1, js)) g_appInstance->ExecuteJs(js); break; }
+        case 'J': { std::string js; if (ParseLenBody(line, 1, js)) g_appInstance->QueueJs(js); break; }
         case 'N': { std::string url; if (ParseLenBody(line, 1, url)) g_appInstance->Navigate(url); break; }
         case 'V': {
             int w = 0, h = 0;
@@ -115,6 +115,41 @@ void SuiHelperApp::Navigate(const std::string& urlUtf8) {
 void SuiHelperApp::ExecuteJs(const std::string& javascript) {
     if (!browser_) return;
     browser_->GetMainFrame()->ExecuteJavaScript(javascript, "sentinelui://", 0);
+}
+
+// Software cursor: GTA V hides the OS cursor and OSR draws none — the page renders
+// its own click-through arrow so users can see where they're pointing.
+const char* kCursorJs =
+    "(function(){"
+    "if(document.getElementById('sui-cursor'))return;"
+    "var c=document.createElement('div');"
+    "c.id='sui-cursor';"
+    "c.style.cssText='position:fixed;left:0;top:0;width:20px;height:20px;"
+    "pointer-events:none;z-index:2147483647;mix-blend-mode:difference;';"
+    "c.innerHTML='<svg width=\"20\" height=\"20\" viewBox=\"0 0 20 20\">"
+    "<path d=\"M2 2 L10 14 L12 12 L16 18 L18 16 L14 10 L16 8 Z\" "
+    "fill=\"rgba(255,255,255,.95)\" stroke=\"rgba(0,0,0,.85)\" stroke-width=\"1.5\"/></svg>';"
+    "document.body.appendChild(c);"
+    "var move=function(e){c.style.left=e.clientX+'px';c.style.top=e.clientY+'px';};"
+    "document.addEventListener('mousemove',move,true);"
+    "document.addEventListener('mousedown',function(){c.style.transform='translate(-2px,-1px) scale(.9)';},true);"
+    "document.addEventListener('mouseup',function(){c.style.transform='translate(-2px,-2px)';},true);"
+    "})();";
+
+void SuiHelperApp::QueueJs(const std::string& javascript) {
+    std::lock_guard<std::mutex> lock(jsMutex_);
+    jsQueue_.push_back(javascript);
+}
+
+void SuiHelperApp::FlushJsQueue() {
+    if (!browser_) return;
+    std::vector<std::string> batch;
+    {
+        std::lock_guard<std::mutex> lock(jsMutex_);
+        if (jsQueue_.empty()) return;
+        batch.swap(jsQueue_);
+    }
+    for (const auto& js : batch) ExecuteJs(js);
 }
 
 void SuiHelperApp::DispatchKey(bool down, int vk, int scancode, bool extended) {
@@ -214,6 +249,7 @@ int RunBrowserProcess(const HelperConfig& cfg, FrameShm* shm) {
     bool quitting = false;
     while (!quitting) {
         CefDoMessageLoopWork();
+        app->FlushJsQueue();
         if (cfg.timeoutSeconds && GetTickCount64() >= endTick) quitting = true;
         if (cfg.selftest && app->paintCount >= cfg.selftestPaints) quitting = true;
         std::this_thread::sleep_for(std::chrono::milliseconds(8));

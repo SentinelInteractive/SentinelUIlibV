@@ -16,11 +16,18 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "ipc.h"
 #include "shm.h"
+
+namespace sui_helper {
+
+// Software cursor injected into pages (defined in helper_app.cpp).
+extern const char* kCursorJs;
 
 namespace sui_helper {
 
@@ -103,6 +110,10 @@ public:
     void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool isLoading, bool, bool) override {
         LogConsole(isLoading ? std::string("[load] loading") : std::string("[load] done"));
         IpcSendEvent(isLoading ? "load:loading" : "load:done");
+        if (!isLoading) {
+            // Inject the software cursor once the page finished loading.
+            QueueJs(kCursorJs);
+        }
     }
 
     void OnLoadError(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, ErrorCode code,
@@ -114,6 +125,12 @@ public:
 
     CefRefPtr<CefBrowser> browser() const { return browser_; }
     void SetProcessor(void (*fn)(const std::string&)) { logFn_ = fn; }
+
+    // Queue JS for execution on the CEF pump thread (thread-safe).
+    void QueueJs(const std::string& javascript);
+
+    // Executes queued JS on the pump thread.
+    void FlushJsQueue();
 
     // ---- commands from the ASI (game thread -> pipe -> here) ----
     void ExecuteJs(const std::string& javascript);
@@ -131,6 +148,9 @@ private:
     void LogConsole(const std::string& msg) {
         if (logFn_) logFn_(msg);
     }
+
+    std::mutex jsMutex_;
+    std::vector<std::string> jsQueue_;
 
     FrameShm* shm_;
     CefRefPtr<CefBrowser> browser_;
