@@ -19,6 +19,7 @@
 #include <string>
 #include <thread>
 
+#include "ipc.h"
 #include "shm.h"
 
 namespace sui_helper {
@@ -29,6 +30,7 @@ struct HelperConfig {
     std::wstring cacheDir;
     std::wstring logDir;
     std::wstring shmName;        // L"Local\\SentinelUI_Frames" etc.
+    std::wstring pipeName;       // L"\\\\.\\pipe\\SentinelUI"
     int viewWidth = 1280;
     int viewHeight = 720;
     int selftestPaints = 12;
@@ -90,23 +92,40 @@ public:
     // CefDisplayHandler
     bool OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t, const CefString& message,
                           const CefString&, int) override {
-        // JS->host channel. P1: log; IPC forwarding lands with the ASI consumer.
-        LogConsole(message.ToString());
+        // JS->host channel: log locally + forward to the ASI (issue #1 bridge).
+        std::string msg = message.ToString();
+        LogConsole(msg);
+        IpcSendEvent("console:" + msg);
         return true;
     }
 
     // CefLoadHandler
     void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool isLoading, bool, bool) override {
         LogConsole(isLoading ? std::string("[load] loading") : std::string("[load] done"));
+        IpcSendEvent(isLoading ? "load:loading" : "load:done");
     }
 
     void OnLoadError(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, ErrorCode code,
                      const CefString& text, const CefString& url) override {
-        LogConsole("[load-error] " + text.ToString() + " url=" + url.ToString());
+        std::string body = text.ToString() + " url=" + url.ToString();
+        LogConsole("[load-error] " + body);
+        IpcSendEvent("load-error:" + body);
     }
 
     CefRefPtr<CefBrowser> browser() const { return browser_; }
     void SetProcessor(void (*fn)(const std::string&)) { logFn_ = fn; }
+
+    // ---- commands from the ASI (game thread -> pipe -> here) ----
+    void ExecuteJs(const std::string& javascript);
+    void SetVisible(bool visible);
+    void SetFocused(bool keyboard, bool mouse);
+    void SetViewport(int width, int height);
+    void DispatchKey(bool down, int vk, int scancode, bool extended);
+    void DispatchChar(int codePoint);
+    void DispatchMouseMove(int x, int y);
+    void DispatchMouseButton(int button, bool down, int x, int y);
+    void DispatchMouseWheel(int delta, int x, int y);
+    void Navigate(const std::string& urlUtf8);
 
 private:
     void LogConsole(const std::string& msg) {
@@ -124,6 +143,9 @@ private:
 // Runs the CEF browser-process main loop on the calling thread (blocking until
 // Shutdown). Returns after CefShutdown.
 int RunBrowserProcess(const HelperConfig& cfg, FrameShm* shm);
+
+// Registers the IPC command handler (call after StartIpc).
+void SetupIpcCommands();
 
 }  // namespace sui_helper
 

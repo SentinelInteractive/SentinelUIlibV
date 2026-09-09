@@ -81,11 +81,25 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     if (cfg.cacheDir.empty()) cfg.cacheDir = cfg.moduleDir + L"\\SentinelUI\\cache";
     cfg.logDir = GetArg(cmdline, L"logs");
     if (cfg.logDir.empty()) cfg.logDir = cfg.moduleDir + L"\\SentinelUI\\logs";
+    cfg.pipeName = GetArg(cmdline, L"pipe");
+    if (cfg.pipeName.empty()) cfg.pipeName = L"\\\\.\\pipe\\SentinelUI";
 
     sui_host::Log::Initialize(cfg.logDir, L"sentinelui_helper");
     SUI_LOG_INFO("SentinelUI_Host starting (content=%ls, shm=%ls, view=%dx%d, selftest=%d).",
                  cfg.contentFile.c_str(), cfg.shmName.c_str(), cfg.viewWidth, cfg.viewHeight,
                  cfg.selftest ? 1 : 0);
+
+    // IPC: connect to the ASI's pipe, start the reader, then register handling
+    // of ASI->helper commands (input, exec-js, show/hide, viewport, ...).
+    if (!cfg.selftest) {
+        std::wstring err = StartIpc(cfg.pipeName);
+        if (err.empty()) {
+            SetupIpcCommands();
+            SUI_LOG_INFO("IPC connected.");
+        } else {
+            SUI_LOG_WARN("IPC: %ls", err.c_str());
+        }
+    }
 
     FrameShm shm;
     if (!shm.Open(cfg.shmName.c_str(), 4096, 2160)) {
@@ -96,6 +110,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     int rc = RunBrowserProcess(cfg, &shm);
     shm.Close();
+    StopIpc();
     SUI_LOG_INFO("SentinelUI_Host exiting (%d).", rc);
     return rc;
 }

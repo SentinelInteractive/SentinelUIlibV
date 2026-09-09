@@ -12,6 +12,7 @@
 #include "exports.h"
 #include "framesrc.h"
 #include "hooks.h"
+#include "ipc.h"
 #include "renderer.h"
 #include "suilog.h"
 
@@ -40,6 +41,7 @@ FrameSource g_frames;
 bool g_visible = true;
 bool g_framesReady = false;
 bool g_shutdownRequested = false;
+bool g_capture = false;            // input capture (F10 / SuiSetCapture)
 HostPaths g_paths;
 HMODULE g_hinst = nullptr;
 
@@ -166,6 +168,7 @@ void StopHelper() {
         g_helperProcess = nullptr;
         SUI_LOG_INFO("Helper process stopped.");
     }
+    StopIpcServer();
 }
 
 struct FindCtx {
@@ -201,6 +204,7 @@ DWORD WINAPI BootThread(LPVOID) {
     char dbg[2] = {0};
     if (GetEnvironmentVariableA("SENTINELUI_DEBUG_NOWINDOW", dbg, 2) == 1 && dbg[0] == '1') {
         SUI_LOG_INFO("DEBUG_NOWINDOW=1: skipping window+hooks, starting helper only.");
+        StartIpcServer();
         StartHelper();
         return 0;
     }
@@ -215,6 +219,8 @@ DWORD WINAPI BootThread(LPVOID) {
 
     if (!InstallHooks(gameWindow)) { SUI_LOG_ERROR("Hook installation failed."); return 0; }
 
+    // IPC server BEFORE spawning the helper so it can connect immediately.
+    StartIpcServer();
     StartHelper();
     if (!g_framesReady) { SUI_LOG_ERROR("Frames not available; overlay disabled."); }
 
@@ -233,15 +239,56 @@ void StopHost() {
 
 }  // namespace
 
+// ---- input capture state (managed + F10) ----
+namespace sui_host {
+void SetCaptureState(bool on) {
+    g_capture = on;
+    SendCommand(on ? "C1\n" : "C0\n");
+    SUI_LOG_INFO("Capture -> %s", on ? "on" : "off");
+}
+}  // namespace sui_host
+
 // ---- exported C API ----------------------------------------------------------
 
 extern "C" {
 
 int SuiGetApiVersion(void) { return SUI_API_VERSION; }
 
-void SuiPumpEvents(void) { /* P2: per-token event queues */ }
+void SuiPumpEvents(void) {
+    // Drain helper->ASI events into the managed sink (game thread by contract).
+    sui_host::DrainEventsToSink();
+}
 
 void SuiShutdown(void) { StopHost(); }
+
+// ---- issue #1 exports ----
+void SuiCmdVisible(int layerId, int visible) {
+    SendCommand(visible ? "S\n" : "H\n");
+    (void)layerId;   // single layer for now
+}
+
+void SuiCmdFocus(int layerId, int keyboard, int mouse) {
+    SendCommand(std::string("F") + (keyboard ? "1" : "0") + (mouse ? "1" : "0") + "\n");
+    (void)layerId;
+}
+
+void SuiExecuteJs(int layerId, const char* jsUtf8) {
+    if (!jsUtf8) return;
+    std::string js(jsUtf8);
+    SendCommand("J" + std::to_string(js.size()) + ":" + js + "\n");
+    (void)layerId;
+}
+
+void SuiCmdNavigate(int layerId, const char* urlUtf8) {
+    if (!urlUtf8) return;
+    std::string url(urlUtf8);
+    SendCommand("N" + std::to_string(url.size()) + ":" + url + "\n");
+    (void)layerId;
+}
+
+void SuiSetCapture(int enabled) { ::sui_host::SetCaptureState(enabled != 0); }
+int  SuiIsCaptureActive(void) { return g_capture ? 1 : 0; }
+void SuiRegisterEventSink(void (*cb)(const char* utf8)) { ::sui_host::SetEventSink(cb); }
 
 }  // extern "C"
 

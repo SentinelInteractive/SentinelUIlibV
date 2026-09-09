@@ -37,6 +37,9 @@ public:
     // Draw the current overlay texture onto the swapchain backbuffer (game thread).
     void DrawFrame(IDXGISwapChain* swapChain);
 
+    int width() const { return texWidth_; }
+    int height() const { return texHeight_; }
+
     // Forget resources after ResizeBuffers (recreate lazily).
     void Invalidate() { ready_ = false; }
 

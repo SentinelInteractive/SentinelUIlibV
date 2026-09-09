@@ -61,6 +61,34 @@ namespace SentinelUI
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void SuiShutdownDelegate();
 
+        // ---- issue #1 exports ----
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiCmdDelegate(int layerId, int value);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiCmdFocusDelegate(int layerId, int keyboard, int mouse);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiJsDelegate(int layerId, [MarshalAs(UnmanagedType.LPStr)] string utf8);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiCaptureDelegate(int enabled);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiSinkRegisterDelegate(IntPtr fnPtr);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiEventSinkNative([MarshalAs(UnmanagedType.LPStr)] string line);
+
+        private static SuiCmdDelegate _cmdVisible;
+        private static SuiCmdFocusDelegate _cmdFocus;
+        private static SuiJsDelegate _execJs;
+        private static SuiJsDelegate _cmdNavigate;
+        private static SuiCaptureDelegate _setCapture;
+        private static SuiGetApiVersionDelegate _isCaptureActive;
+        private static SuiSinkRegisterDelegate _registerSink;
+        private static SuiEventSinkNative _sinkDelegate;   // kept alive (GC guard)
+
         private static IntPtr _module;
         private static int _apiVersion;
         private static SuiGetApiVersionDelegate _getApiVersion;
@@ -103,6 +131,15 @@ namespace SentinelUI
                 _pumpEvents = LoadExport<SuiPumpEventsDelegate>("SuiPumpEvents");
                 _shutdown = LoadExport<SuiShutdownDelegate>("SuiShutdown");
 
+                // issue #1 exports (additive; absent on older hosts -> features no-op)
+                _cmdVisible = LoadExport<SuiCmdDelegate>("SuiCmdVisible");
+                _cmdFocus = LoadExport<SuiCmdFocusDelegate>("SuiCmdFocus");
+                _execJs = LoadExport<SuiJsDelegate>("SuiExecuteJs");
+                _cmdNavigate = LoadExport<SuiJsDelegate>("SuiCmdNavigate");
+                _setCapture = LoadExport<SuiCaptureDelegate>("SuiSetCapture");
+                _isCaptureActive = LoadExport<SuiGetApiVersionDelegate>("SuiIsCaptureActive");
+                _registerSink = LoadExport<SuiSinkRegisterDelegate>("SuiRegisterEventSink");
+
                 if (_apiVersion < 1)
                 {
                     SuiLog.Error($"Host API version {_apiVersion} is not supported by this API assembly.");
@@ -130,6 +167,35 @@ namespace SentinelUI
         {
             IntPtr proc = GetProcAddress(_module, name);
             return proc == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<T>(proc);
+        }
+
+        // ---- issue #1 API (safe optional calls; host v2+ has them) ----
+        public static bool SupportsIssue1 =>
+            _cmdVisible != null && _execJs != null && _isCaptureActive != null;
+
+        public static void CmdVisible(int layerId, bool visible) =>
+            _cmdVisible?.Invoke(layerId, visible ? 1 : 0);
+
+        public static void CmdFocus(int layerId, bool keyboard, bool mouse) =>
+            _cmdFocus?.Invoke(layerId, keyboard ? 1 : 0, mouse ? 1 : 0);
+
+        public static void ExecuteJs(int layerId, string jsUtf8) =>
+            _execJs?.Invoke(layerId, jsUtf8);
+
+        public static void CmdNavigate(int layerId, string urlUtf8) =>
+            _cmdNavigate?.Invoke(layerId, urlUtf8);
+
+        public static bool CaptureActive => _isCaptureActive != null && _isCaptureActive() != 0;
+
+        public static void SetCapture(bool on) =>
+            _setCapture?.Invoke(on ? 1 : 0);
+
+        public static void RegisterEventSink(Action<string> handler)
+        {
+            if (_registerSink == null) return;
+            _sinkDelegate = (line) => { try { handler(line); } catch { /* never crash host */ } };
+            IntPtr fnPtr = Marshal.GetFunctionPointerForDelegate(_sinkDelegate);
+            _registerSink(fnPtr);
         }
 
         /// <summary>Drains host event queues. MUST be called on the game thread (per-frame).</summary>

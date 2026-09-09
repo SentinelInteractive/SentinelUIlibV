@@ -7,6 +7,7 @@
 
 #include "hooks.h"
 #include "framesrc.h"
+#include "ipc.h"
 #include "renderer.h"
 #include "suilog.h"
 
@@ -14,6 +15,7 @@
 
 #include <d3d11.h>
 #include <vector>
+#include <string>
 
 #pragma comment(lib, "d3d11.lib")
 
@@ -23,6 +25,8 @@ extern Renderer g_renderer;    // defined in host.cpp
 extern FrameSource g_frames;   // defined in host.cpp
 extern bool g_visible;         // defined in host.cpp
 extern bool g_framesReady;     // defined in host.cpp
+extern bool g_capture;         // defined in host.cpp
+void SetCaptureState(bool on); // defined in host.cpp
 
 namespace {
 
@@ -40,6 +44,14 @@ PresentFn g_origPresent = nullptr;
 ResizeFn g_origResize = nullptr;
 
 IDXGISwapChain* g_swapChain = nullptr;
+bool g_viewportSent = false;
+
+void SyncViewport() {
+    if (g_viewportSent || !g_renderer.ready()) return;
+    SendCommand(std::string("V") + std::to_string(g_renderer.width()) + " " +
+                std::to_string(g_renderer.height()) + "\n");
+    g_viewportSent = true;
+}
 
 void ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
     if (wParam != VK_F9 && wParam != VK_F10) return;
@@ -48,17 +60,67 @@ void ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
         g_visible = !g_visible;
         SUI_LOG_INFO("F9: visibility -> %s", g_visible ? "visible" : "hidden");
     } else {
-        SUI_LOG_INFO("F10: input capture toggle (IPC lands in P2).");
+        SetCaptureState(!g_capture);
     }
 }
+
+// Client-area mouse coords from lParam (signed shorts).
+inline int Cx(LPARAM l) { return (short)LOWORD(l); }
+inline int Cy(LPARAM l) { return (short)HIWORD(l); }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_KEYDOWN:
         case WM_KEYUP:
         case WM_SYSKEYDOWN:
-        case WM_SYSKEYUP:
+        case WM_SYSKEYUP: {
             ToggleHotkeys(wParam, lParam);
+            if (g_capture) {
+                UINT vk = (UINT)wParam;
+                UINT sc = (UINT)((lParam >> 16) & 0xff);
+                bool ext = (lParam >> 24) & 1;
+                bool down = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
+                SendCommand(std::string("K") + (down ? "1" : "0") + " " +
+                            std::to_string(vk) + " " + std::to_string(sc) + " " +
+                            (ext ? "1" : "0") + "\n");
+                return 0;
+            }
+            break;
+        }
+        case WM_CHAR:
+        case WM_SYSCHAR:
+            if (g_capture) {
+                SendCommand(std::string("U") + std::to_string((int)wParam) + "\n");
+                return 0;
+            }
+            break;
+        case WM_MOUSEMOVE:
+            if (g_capture)
+                SendCommand(std::string("M") + std::to_string(Cx(lParam)) + " " +
+                            std::to_string(Cy(lParam)) + "\n");
+            break;
+        case WM_MOUSEWHEEL:
+            if (g_capture) {
+                int delta = (short)HIWORD(wParam);
+                POINT p = {Cx(lParam), Cy(lParam)};
+                ScreenToClient(hwnd, &p);
+                SendCommand(std::string("W") + std::to_string(delta) + " " +
+                            std::to_string(p.x) + " " + std::to_string(p.y) + "\n");
+                return 0;
+            }
+            break;
+        case WM_LBUTTONDOWN: case WM_LBUTTONUP:
+        case WM_RBUTTONDOWN: case WM_RBUTTONUP:
+        case WM_MBUTTONDOWN: case WM_MBUTTONUP:
+            if (g_capture) {
+                bool down = (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN);
+                int button = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) ? 0 :
+                             (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP) ? 2 : 1;
+                SendCommand(std::string("B") + std::to_string(button) + " " +
+                            (down ? "1" : "0") + " " + std::to_string(Cx(lParam)) + " " +
+                            std::to_string(Cy(lParam)) + "\n");
+                return 0;
+            }
             break;
         case WM_SIZE:
             g_renderer.Invalidate();   // re-create texture on next Present
@@ -78,9 +140,12 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
     // Lazy resource init on the first Present (game device may not exist earlier).
     if (!g_renderer.ready() || g_swapChain != swapChain) {
         g_swapChain = swapChain;
-        if (!g_renderer.EnsureResources(swapChain)) {
-            g_renderer.Invalidate();
+        if (g_renderer.EnsureResources(swapChain)) {
+            g_viewportSent = false;   // new backbuffer size -> re-sync helper viewport
+            SyncViewport();
         }
+    } else {
+        SyncViewport();
     }
 
     if (g_visible && g_renderer.ready()) {
@@ -100,6 +165,7 @@ HRESULT WINAPI ResizeBuffersHook(IDXGISwapChain* swapChain, UINT count, UINT w, 
                                  DXGI_FORMAT format, UINT flags) {
     HRESULT hr = g_origResize(swapChain, count, w, h, format, flags);
     g_renderer.Invalidate();
+    g_viewportSent = false;
     return hr;
 }
 

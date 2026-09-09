@@ -74,6 +74,20 @@ namespace SentinelUI.Bootstrap
 
                 Game.LogTrivial($"[SentinelUI] Native host ready (API v{SentinelUI.Sui.HostApiVersion}). Starting pump...");
                 StartPump();
+                // Page events are already logged in SentinelUI\logs; also mirror
+                // NUI_* messages to the RPH console line so in-game tests are visible.
+                SentinelUI.Sui.MessageReceived += (m) =>
+                {
+                    try
+                    {
+                        if (string.Equals(m.Type, "console", StringComparison.Ordinal) &&
+                            m.PayloadJson != null && m.PayloadJson.StartsWith("NUI_"))
+                        {
+                            Game.LogTrivial("[SentinelUI] page event: " + m.PayloadJson);
+                        }
+                    }
+                    catch { /* never fail the pump */ }
+                };
                 Game.LogTrivial("[SentinelUI] Bootstrap ready.");
             }
             catch (Exception ex)
@@ -118,7 +132,12 @@ namespace SentinelUI.Bootstrap
             {
                 while (_running)
                 {
-                    try { SentinelUI.Sui.Pump(); }
+                    try
+                    {
+                        SentinelUI.Sui.Pump();
+                        // While a UI has input focus, the game must not eat the keys/mouse.
+                        if (SentinelUI.Sui.CaptureActive) DisableCaptureControls();
+                    }
                     catch (Exception ex)
                     {
                         Game.LogTrivial("[SentinelUI] Pump error: " + ex);
@@ -126,6 +145,23 @@ namespace SentinelUI.Bootstrap
                     GameFiber.Yield();
                 }
             });
+        }
+
+        // DISABLE_CONTROL_ACTION (from natives.json PAD): block movement/camera etc.
+        private const ulong DisableControlAction = 0xFE99B66D079CF6BC;
+        private static readonly int[] CapturedControls =
+            { 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 44 };
+
+        private static void DisableCaptureControls()
+        {
+            foreach (int control in CapturedControls)
+            {
+                try
+                {
+                    Rage.Native.NativeFunction.CallByHash<bool>(DisableControlAction, 0, control, true);
+                }
+                catch { /* native call fails gracefully on game-thread edge cases */ }
+            }
         }
 
         private static string ResolveHostPath()

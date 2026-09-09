@@ -11,6 +11,8 @@
   <ItemGroup>
     <!-- Lets the .NET SDK build net472 without Visual Studio installed (CI-friendly). -->
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <!-- JavaScriptSerializer for SuiLayer.Send (part of .NET Framework). -->
+    <Reference Include="System.Web.Extensions" />
   </ItemGroup>
 
 </Project>

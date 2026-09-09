@@ -24,6 +24,7 @@ add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_executable(sentinel_helper WIN32
   helper.cpp
   helper_app.cpp
+  ipc.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../host/suilog.cpp)
 SET_EXECUTABLE_TARGET_PROPERTIES(sentinel_helper)
 target_include_directories(sentinel_helper PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../host)

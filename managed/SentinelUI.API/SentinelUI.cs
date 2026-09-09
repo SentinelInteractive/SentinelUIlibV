@@ -22,6 +22,33 @@ namespace SentinelUI
         /// <summary>Host export-table API version (0 when unavailable).</summary>
         public static int HostApiVersion => NativeHost.ApiVersion;
 
+        /// <summary>True when input capture is active (F10 or SetCapture) — the game
+        /// should hand mouse/keyboard to the UI. Consumers (Bootstrap) use this to
+        /// disable game controls while typed/clicked UI is focused.</summary>
+        public static bool CaptureActive => NativeHost.CaptureActive;
+
+        /// <summary>Raised for every event arriving from the UI (console/load/...).</summary>
+        public static event Action<SuiMessage> MessageReceived;
+
+        internal static void DispatchRawEvent(string line)
+        {
+            // line format: "<kind>:<body>" from the helper (e.g. console:NUI_...)
+            int colon = line.IndexOf(':');
+            string kind = colon < 0 ? line : line.Substring(0, colon);
+            string body = colon < 0 ? string.Empty : line.Substring(colon + 1);
+
+            SuiMessage msg = new SuiMessage { Type = kind, PayloadJson = body };
+            lock (Gate)
+            {
+                foreach (var layer in Layers) layer.RaiseMessage(msg);
+            }
+            MessageReceived?.Invoke(msg);
+        }
+
+        /// <summary>Enables/disables input capture. While enabled the Bootstrap's pump
+        /// fiber disables game controls so typing/clicks go to the UI.</summary>
+        public static void SetCapture(bool on) => NativeHost.SetCapture(on);
+
         /// <summary>
         /// Initializes the bridge. Searches common locations for the host module:
         /// current directory (game root when launched by RPH) and the &lt;game&gt;\SentinelUI\ folder.
@@ -46,7 +73,12 @@ namespace SentinelUI
 
                 foreach (var candidate in candidates)
                 {
-                    if (NativeHost.Initialize(candidate)) return true;
+                    if (NativeHost.Initialize(candidate))
+                    {
+                        // Wire the native event sink once (game thread pump -> here).
+                        NativeHost.RegisterEventSink(DispatchRawEvent);
+                        return true;
+                    }
                 }
 
                 SuiLog.Warn("SentinelUI host not found in any standard location. " +
@@ -123,27 +155,38 @@ namespace SentinelUI
 
         public void SetVisible(bool visible)
         {
-            // TODO(P2): NativeHost.SuiSetLayerVisible(...)
+            NativeHost.CmdVisible((int)Id, visible);
         }
 
         public void SetFocus(bool keyboard, bool mouse)
         {
-            // TODO(P2): NativeHost.SuiSetLayerFocus(...)
+            NativeHost.CmdFocus((int)Id, keyboard, mouse);
         }
 
         public void SetClickThrough(bool enabled)
         {
-            // TODO(P2): NativeHost.SuiSetLayerClickThrough(...)
+            // P2: click-through per layer arrives with the layer stack.
         }
 
         public void ExecuteJs(string javascript)
         {
-            // TODO(P2): NativeHost.SuiExecuteJs(...)
+            NativeHost.ExecuteJs((int)Id, javascript);
         }
 
         public void Send(object payload)
         {
-            // TODO(P2): NativeHost.SuiSendData(... with JSON envelope {v,id,layer,type,payload})
+            // Interim: JS postMessage bridge (JSON envelope arrives with the scheme in P2).
+            string json;
+            try
+            {
+                json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(payload);
+            }
+            catch
+            {
+                json = null;
+            }
+            if (json != null)
+                NativeHost.ExecuteJs((int)Id, "window.postMessage(" + json + ", '*')");
         }
 
         public void Close()

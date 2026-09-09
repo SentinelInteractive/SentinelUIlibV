@@ -42,7 +42,7 @@ namespace SentinelUI.HostProbe
             Check(Sui.HostAvailable, "HostAvailable is true after init");
             Check(Sui.HostApiVersion >= 1, "API version handshake ok (v" + Sui.HostApiVersion + ")");
 
-            // 3. Create a layer and exercise the facade (no-op plumbing until P2, must not throw).
+            // 3. Create a layer and exercise the facade (P2 plumbing, must not throw).
             Console.WriteLine("[3] facade smoke");
             var okLayer = Sui.CreateLayer("sentinelui://probe/page.html");
             Check(okLayer != null, "CreateLayer works with living host");
@@ -61,6 +61,9 @@ namespace SentinelUI.HostProbe
             }
             okLayer?.Close();
 
+            // 3b. Issue-1 smoke (IPC + capture + events) — needs the helper running.
+            Issue1(init);
+
             // 4. Graceful shutdown + repeat-safe behavior.
             Console.WriteLine("[4] shutdown");
             Sui.Shutdown();
@@ -70,6 +73,51 @@ namespace SentinelUI.HostProbe
 
             Console.WriteLine(_failures == 0 ? "PROBE RESULT: PASS" : $"PROBE RESULT: FAIL ({_failures})");
             Environment.ExitCode = _failures == 0 ? 0 : 1;
+        }
+
+        private static void Issue1(bool init)
+        {
+            // Requires the host to have spawned the helper + IPC (debug env starts both).
+            if (!init || !Sui.HostAvailable) return;
+            Console.WriteLine("[5] issue-1 IPC/capture/events");
+            try
+            {
+                Check(!Sui.CaptureActive, "Capture inactive by default");
+                Sui.SetCapture(true);
+                Check(Sui.CaptureActive, "SetCapture(true) reflected on export");
+                Sui.SetCapture(false);
+
+                var layer = Sui.CreateLayer("sentinelui://probe/issue1.html");
+                Check(layer != null, "layer created");
+                var events = new System.Collections.Generic.List<string>();
+                Action<SuiMessage> handler = m => { lock (events) events.Add(m.Type + "|" + m.PayloadJson); };
+                Sui.MessageReceived += handler;
+                try
+                {
+                    layer?.SetVisible(true);
+                    layer?.SetFocus(true, true);
+                    layer?.ExecuteJs("document.title='probe';");
+                    layer?.Send(new { tag = "hello" });
+                    const int deadlineMs = 6000;
+                    var start = Environment.TickCount;
+                    while (Environment.TickCount - start < deadlineMs)
+                    {
+                        Sui.Pump();
+                        lock (events) { if (events.Count > 0) break; }
+                        System.Threading.Thread.Sleep(50);
+                    }
+                    lock (events)
+                    {
+                        Check(events.Count > 0, "events delivered from helper via pump (" + events.Count + ")");
+                        if (events.Count > 0) Console.WriteLine("  sample event: " + events[0]);
+                    }
+                }
+                finally { Sui.MessageReceived -= handler; layer?.Close(); }
+            }
+            catch (Exception ex)
+            {
+                Check(false, "issue-1 smoke threw: " + ex.Message);
+            }
         }
     }
 }
