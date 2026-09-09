@@ -147,14 +147,14 @@ namespace SentinelUI.Bootstrap
             });
         }
 
-        // DISABLE_CONTROL_ACTION (from natives.json PAD): block movement/camera etc.
+        // DISABLE_CONTROL_ACTION (from natives.json PAD). While a UI has input focus the
+        // game must not eat keys OR the mouse: disable the entire default control group.
         private const ulong DisableControlAction = 0xFE99B66D079CF6BC;
-        private static readonly int[] CapturedControls =
-            { 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 44 };
 
         private static void DisableCaptureControls()
         {
-            foreach (int control in CapturedControls)
+            // 0..340 covers the standard control index space (movement, look, cursor, ...).
+            for (int control = 0; control <= 340; control++)
             {
                 try
                 {

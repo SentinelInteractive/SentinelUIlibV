@@ -145,20 +145,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
-    if (!g_framesReady) return g_origPresent(swapChain, syncInterval, flags);
-
-    // Lazy resource init on the first Present (game device may not exist earlier).
-    if (!g_renderer.ready() || g_swapChain != swapChain) {
+    // Lazy resource init + viewport sync from the very first Present, regardless
+    // of frame availability (input scaling must exist even before first paint).
+    if (g_swapChain != swapChain || !g_renderer.ready()) {
         g_swapChain = swapChain;
         if (g_renderer.EnsureResources(swapChain)) {
-            g_viewportSent = false;   // new backbuffer size -> re-sync helper viewport
-            SyncViewport();
+            g_viewportSent = false;
         }
-    } else {
-        SyncViewport();
     }
+    SyncViewport();
 
-    if (g_visible && g_renderer.ready()) {
+    if (g_framesReady && g_visible && g_renderer.ready()) {
         if (g_frameBuf.empty()) g_frameBuf.resize(4096 * 2160 * 4u);
         uint64_t gen = g_lastGen;
         if (g_frames.Take(g_frameBuf.data(), g_frameBuf.size(), gen)) {
