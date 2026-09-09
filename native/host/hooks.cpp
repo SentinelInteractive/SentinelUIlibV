@@ -108,7 +108,7 @@ void StopMousePolling() {
     }
 }
 
-void OnCaptureChanged(bool on) {
+void InternalOnCaptureChanged(bool on) {
     if (!g_gameWindow) return;
     if (on) {
         ShowCursor(TRUE);
@@ -237,6 +237,9 @@ HRESULT WINAPI ResizeBuffersHook(IDXGISwapChain* swapChain, UINT count, UINT w, 
 }
 
 }  // namespace
+
+// sui_host-scope wrapper (hooks.h declaration) -> anonymous helper.
+void OnCaptureChanged(bool on) { InternalOnCaptureChanged(on); }
 
 bool InstallHooks(HWND gameWindow) {
     if (g_hooked) return true;
