@@ -29,8 +29,6 @@ namespace sui_helper {
 // Software cursor injected into pages (defined in helper_app.cpp).
 extern const char* kCursorJs;
 
-namespace sui_helper {
-
 struct HelperConfig {
     std::wstring moduleDir;      // exe directory
     std::wstring contentFile;    // file:// URL target
