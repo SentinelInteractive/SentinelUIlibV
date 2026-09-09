@@ -15,6 +15,8 @@ namespace sui_host {
 
 bool InstallHooks(HWND gameWindow);
 void RemoveHooks();
+// Captured-state side effects (unclip/show cursor + poll mouse position).
+void OnCaptureChanged(bool on);
 
 }  // namespace sui_host
 

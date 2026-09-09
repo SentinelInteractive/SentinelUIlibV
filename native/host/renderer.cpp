@@ -143,8 +143,19 @@ void Renderer::DrawFrame(IDXGISwapChain* swapChain) {
     D3D11_TEXTURE2D_DESC backDesc;
     back->GetDesc(&backDesc);
 
-    ID3D11RenderTargetView* rtv = nullptr;
-    device_->CreateRenderTargetView(back, nullptr, &rtv);
+    // Reuse cached views; only recreate when the backbuffer changed.
+    ID3D11RenderTargetView* rtv = cachedRtv_;
+    if (rtv && cachedRtvBack_ != (IUnknown*)back) {
+        rtv->Release();
+        rtv = nullptr;
+        cachedRtv_ = nullptr;
+        cachedRtvBack_ = nullptr;
+    }
+    if (!rtv) {
+        device_->CreateRenderTargetView(back, nullptr, &rtv);
+        cachedRtv_ = rtv;
+        cachedRtvBack_ = (IUnknown*)back;
+    }
     back->Release();
     if (!rtv) return;
 
@@ -152,12 +163,15 @@ void Renderer::DrawFrame(IDXGISwapChain* swapChain) {
     // layer texture (browser view size) stretches across the whole screen.
     D3D11_VIEWPORT vp = {0, 0, (float)backDesc.Width, (float)backDesc.Height, 0, 1};
 
-    ID3D11ShaderResourceView* srv = nullptr;
-    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = 1;
-    device_->CreateShaderResourceView(frameTex_, &srvDesc, &srv);
+    if (!cachedSrv_) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+        device_->CreateShaderResourceView(frameTex_, &srvDesc, &cachedSrv_);
+    }
+    ID3D11ShaderResourceView* srv = cachedSrv_;
+    if (!srv) return;
 
     context_->OMSetRenderTargets(1, &rtv, nullptr);
     context_->RSSetViewports(1, &vp);
@@ -172,12 +186,13 @@ void Renderer::DrawFrame(IDXGISwapChain* swapChain) {
     const float blendFactor[4] = {1, 1, 1, 1};
     context_->OMSetBlendState(blend_, blendFactor, 0xffffffff);
     context_->Draw(3, 0);
-
-    if (srv) srv->Release();
-    rtv->Release();
+    // Cached views intentionally kept alive across frames (no per-frame churn).
 }
 
 void Renderer::ReleaseResources() {
+    if (cachedSrv_) { cachedSrv_->Release(); cachedSrv_ = nullptr; }
+    if (cachedRtv_) { cachedRtv_->Release(); cachedRtv_ = nullptr; }
+    cachedRtvBack_ = nullptr;
     if (frameTex_) { frameTex_->Release(); frameTex_ = nullptr; }
     if (vs_) { vs_->Release(); vs_ = nullptr; }
     if (ps_) { ps_->Release(); ps_ = nullptr; }

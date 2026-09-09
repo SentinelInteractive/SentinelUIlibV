@@ -243,6 +243,7 @@ void StopHost() {
 namespace sui_host {
 void SetCaptureState(bool on) {
     g_capture = on;
+    OnCaptureChanged(on);   // unclip/show cursor + poll mouse while captured
     SendCommand(on ? "C1\n" : "C0\n");
     SUI_LOG_INFO("Capture -> %s", on ? "on" : "off");
 }

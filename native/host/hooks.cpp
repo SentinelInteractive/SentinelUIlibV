@@ -14,8 +14,10 @@
 #include <MinHook.h>
 
 #include <d3d11.h>
-#include <vector>
+#include <atomic>
 #include <string>
+#include <thread>
+#include <vector>
 
 #pragma comment(lib, "d3d11.lib")
 
@@ -67,6 +69,62 @@ void ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
 // Client-area mouse coords from lParam (signed shorts).
 inline int Cx(LPARAM l) { return (short)LOWORD(l); }
 inline int Cy(LPARAM l) { return (short)HIWORD(l); }
+
+// --- capture cursor handling ------------------------------------------------
+// GTA V pins/hides the OS cursor while it owns the mouse, so WM_MOUSEMOVE never
+// arrives and an OSR page sees no motion. While captured we unclip + show the
+// cursor and poll GetCursorPos -> SendCommand (page cursor follows the mouse).
+std::thread g_mouseThread;          // (started/stopped only from game thread)
+std::atomic<bool> g_mouseStop{true};
+std::atomic<POINT> g_lastCursor{0, 0};
+
+void StartMousePolling() {
+    if (!g_mouseThread.joinable()) {
+        g_mouseStop = false;
+        g_mouseThread = std::thread([]() {
+            while (!g_mouseStop.load()) {
+                POINT p;
+                if (GetCursorPos(&p)) {
+                    ScreenToClient(g_gameWindow, &p);
+                    POINT prev = g_lastCursor.exchange(p);
+                    if (prev.x != p.x || prev.y != p.y) {
+                        SendCommand(std::string("M") + std::to_string(p.x) + " " +
+                                    std::to_string(p.y) + "\n");
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(8));
+            }
+        });
+    }
+}
+
+void StopMousePolling() {
+    g_mouseStop = true;
+    if (g_mouseThread.joinable()) {
+        g_mouseThread.join();
+        g_mouseThread = std::thread();  // reset
+    }
+}
+
+void OnCaptureChanged(bool on) {
+    if (!g_gameWindow) return;
+    if (on) {
+        ShowCursor(TRUE);
+        RECT rc;
+        if (GetClientRect(g_gameWindow, &rc)) {
+            POINT tl = {rc.left, rc.top};
+            ClientToScreen(g_gameWindow, &tl);
+            rc.left = tl.x; rc.top = tl.y;
+            rc.right += tl.x; rc.bottom += tl.y;
+            ClipCursor(&rc);
+        }
+        StartMousePolling();
+    } else {
+        StopMousePolling();
+        ClipCursor(nullptr);
+        ShowCursor(FALSE);
+    }
+}
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -244,6 +302,7 @@ bool InstallHooks(HWND gameWindow) {
 }
 
 void RemoveHooks() {
+    StopMousePolling();
     if (!g_hooked) return;
     MH_DisableHook(MH_ALL_HOOKS);
     MH_Uninitialize();

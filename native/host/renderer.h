@@ -62,6 +62,10 @@ private:
     ID3D11SamplerState* sampler_ = nullptr;
     ID3D11BlendState* blend_ = nullptr;
     ID3D11InputLayout* layout_ = nullptr;
+    // Cached views: creating RTV/SRV per frame is driver churn (BSOD/D1 risk).
+    ID3D11RenderTargetView* cachedRtv_ = nullptr;
+    IUnknown* cachedRtvBack_ = nullptr;   // backbuffer this RTV belongs to
+    ID3D11ShaderResourceView* cachedSrv_ = nullptr;
     uint64_t uploadedGeneration_ = 0;   // (frames carry generation in hooks.cpp)
     int lastW_ = 0;
     int lastH_ = 0;
