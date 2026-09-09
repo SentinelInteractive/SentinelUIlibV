@@ -100,6 +100,7 @@ void SuiHelperApp::SetViewport(int width, int height) {
     if (width <= 0 || height <= 0) return;
     viewWidth_ = width;
     viewHeight_ = height;
+    SUI_LOG_INFO("helper viewport -> %dx%d", width, height);
     if (browser_) {
         browser_->GetHost()->WasResized();
         browser_->GetHost()->NotifyMoveOrResizeStarted();

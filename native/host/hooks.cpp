@@ -71,22 +71,32 @@ inline int Cy(LPARAM l) { return (short)HIWORD(l); }
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_KEYDOWN:
-        case WM_KEYUP:
-        case WM_SYSKEYDOWN:
-        case WM_SYSKEYUP: {
+        case WM_SYSKEYDOWN: {
+            // Toggle hotkeys ONLY on keydown (keyup must not re-toggle).
             ToggleHotkeys(wParam, lParam);
             if (g_capture) {
                 UINT vk = (UINT)wParam;
                 UINT sc = (UINT)((lParam >> 16) & 0xff);
                 bool ext = (lParam >> 24) & 1;
-                bool down = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
-                SendCommand(std::string("K") + (down ? "1" : "0") + " " +
+                SendCommand(std::string("K") + "1 " +
                             std::to_string(vk) + " " + std::to_string(sc) + " " +
                             (ext ? "1" : "0") + "\n");
                 return 0;
             }
             break;
         }
+        case WM_KEYUP:
+        case WM_SYSKEYUP:
+            if (g_capture) {
+                UINT vk = (UINT)wParam;
+                UINT sc = (UINT)((lParam >> 16) & 0xff);
+                bool ext = (lParam >> 24) & 1;
+                SendCommand(std::string("K") + "0 " +
+                            std::to_string(vk) + " " + std::to_string(sc) + " " +
+                            (ext ? "1" : "0") + "\n");
+                return 0;
+            }
+            break;
         case WM_CHAR:
         case WM_SYSCHAR:
             if (g_capture) {
