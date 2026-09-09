@@ -76,7 +76,8 @@ inline int Cy(LPARAM l) { return (short)HIWORD(l); }
 // cursor and poll GetCursorPos -> SendCommand (page cursor follows the mouse).
 std::thread g_mouseThread;          // (started/stopped only from game thread)
 std::atomic<bool> g_mouseStop{true};
-std::atomic<POINT> g_lastCursor{0, 0};
+std::atomic<int> g_lastCursorX{0};
+std::atomic<int> g_lastCursorY{0};
 
 void StartMousePolling() {
     if (!g_mouseThread.joinable()) {
@@ -86,8 +87,9 @@ void StartMousePolling() {
                 POINT p;
                 if (GetCursorPos(&p)) {
                     ScreenToClient(g_gameWindow, &p);
-                    POINT prev = g_lastCursor.exchange(p);
-                    if (prev.x != p.x || prev.y != p.y) {
+                    int px = g_lastCursorX.exchange(p.x);
+                    int py = g_lastCursorY.exchange(p.y);
+                    if (px != p.x || py != p.y) {
                         SendCommand(std::string("M") + std::to_string(p.x) + " " +
                                     std::to_string(p.y) + "\n");
                     }
