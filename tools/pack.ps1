@@ -44,19 +44,13 @@ $pluginsDir = Join-Path $GameDir "Plugins"
 
 Write-Host "[pack] Deploying to $GameDir" -ForegroundColor Cyan
 
-# ---- clean previous versions (our own artifacts; safe to recreate) ----
-$rootArtifacts = @("SentinelUI.asi", "SentinelUI_Host.exe", "SentinelUI_Worker.exe",
-                   "libcef.dll", "chrome_elf.dll",
-                   "icudtl.dat", "resources.pak", "chrome_100_percent.pak", "chrome_200_percent.pak",
-                   "v8_context_snapshot.bin", "libEGL.dll", "libGLESv2.dll", "d3dcompiler_47.dll",
-                   "dxil.dll", "dxcompiler.dll", "vk_swiftshader.dll", "vk_swiftshader_icd.json",
-                   "vulkan-1.dll", "locales")
-foreach ($name in $rootArtifacts) {
-    $p = Join-Path $GameDir $name
-    if (Test-Path $p) { Remove-Item -Recurse -Force $p }
-}
-if (Test-Path $suiDir) { Remove-Item -Recurse -Force $suiDir }
+# ---- failure-safe pre-step: remove only files we no longer ship or that block the
+#      copy (payload copies below overwrite everything else; no delete-then-fail). ----
+$stale = Join-Path $GameDir "SentinelUI_Worker.exe"
+if (Test-Path $stale) { Remove-Item -Force $stale }
+if (Test-Path $suiDir) { Remove-Item -Recurse -Force $suiDir }   # loner logs/cache/content rebuilt below
 New-Item -ItemType Directory -Force -Path (Join-Path $suiDir "content"), (Join-Path $suiDir "cache"), (Join-Path $suiDir "logs") | Out-Null
+Write-Host "[pack] copy phase (overwrites existing root files)..." -ForegroundColor DarkGray
 
 # ---- host module (ASI compositor) ----
 Copy-Item (Join-Path $repo "native\host\build\SentinelUI.asi") $GameDir
