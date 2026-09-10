@@ -33,6 +33,9 @@ $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if (-not (Test-Path $GameDir)) { throw "Game dir not found: $GameDir" }
+if (Get-Process -Name GTA5 -ErrorAction SilentlyContinue) {
+    throw "GTA5 is running - close the game before deploying (runtime files and the CEF cache are locked)."
+}
 $hostOut = Join-Path $repo "native\host\build"
 if (-not (Test-Path (Join-Path $hostOut "SentinelUI.asi"))) { throw "Host not built (run tools\build-host.ps1)." }
 
@@ -48,8 +51,11 @@ Write-Host "[pack] Deploying to $GameDir" -ForegroundColor Cyan
 #      copy (payload copies below overwrite everything else; no delete-then-fail). ----
 $stale = Join-Path $GameDir "SentinelUI_Worker.exe"
 if (Test-Path $stale) { Remove-Item -Force $stale }
-if (Test-Path $suiDir) { Remove-Item -Recurse -Force $suiDir }   # loner logs/cache/content rebuilt below
-New-Item -ItemType Directory -Force -Path (Join-Path $suiDir "content"), (Join-Path $suiDir "cache"), (Join-Path $suiDir "logs") | Out-Null
+# Refresh content only - logs/cache belong to past sessions, and deleting the
+# whole folder used to abort mid-way when the game still held the CEF cache open.
+$contentDir = Join-Path $suiDir "content"
+if (Test-Path $contentDir) { Remove-Item -Recurse -Force $contentDir }
+New-Item -ItemType Directory -Force -Path $contentDir, (Join-Path $suiDir "cache"), (Join-Path $suiDir "logs") | Out-Null
 Write-Host "[pack] copy phase (overwrites existing root files)..." -ForegroundColor DarkGray
 
 # ---- host module (ASI compositor) ----
@@ -63,6 +69,9 @@ Get-ChildItem $helperOut | Where-Object { $_.Name -notin @("SentinelUI.lib", "Se
 
 # ---- content + license ----
 Copy-Item (Join-Path $repo "web\content\p1_demo.html") (Join-Path $suiDir "content")
+Copy-Item (Join-Path $repo "web\content\p1_demo.js") (Join-Path $suiDir "content")
+Copy-Item (Join-Path $repo "web\content\demo_hud.html") (Join-Path $suiDir "content")
+Copy-Item (Join-Path $repo "web\content\demo_hud.js") (Join-Path $suiDir "content")
 Copy-Item (Join-Path $repo "web\content\selftest_page.html") (Join-Path $suiDir "content")
 $cefLicense = Join-Path $cefRoot "LICENSE.txt"
 if (Test-Path $cefLicense) { Copy-Item $cefLicense (Join-Path $suiDir "LICENSE_CEF.txt") } else { Write-Host "[pack] WARN cef LICENSE.txt not found" -ForegroundColor Yellow }

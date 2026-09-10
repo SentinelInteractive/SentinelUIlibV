@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>SentinelUI.API</AssemblyName>
     <RootNamespace>SentinelUI</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <!-- The managed bridge must never force a dependency on RPH/SHVDN at compile time.
          It talks to the native host through exported C functions only. -->
   </PropertyGroup>

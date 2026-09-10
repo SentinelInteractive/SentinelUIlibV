@@ -51,6 +51,14 @@ Hard-won knowledge from building SentinelUI (2026-09-08). Every item below was
 - **Consequence: run CEF in its own EXE process** (helper process), share frames via named shared
   memory, and let a thin in-game module be a pure compositor. Bonus: page crashes can't kill the
   game, and CEF lifecycle/teardown problems disappear.
+- **`CefResponse::SetMimeType` wants a BARE MIME type.** `text/html; charset=utf-8` yields an
+  unparseable Content-Type and the renderer displays the page as a **source view** (escaped
+  HTML inside a `<pre>`) instead of parsing it — subresources silently never load. Serve
+  `text/html`, put `<meta charset>` in the page. Cost ~an hour of bisecting to find (2026-09-09).
+- Custom standard schemes must be registered in **every process** (`OnRegisterCustomSchemes`
+  fires per process — pass the app into `CefExecuteProcess` for children). The scheme's
+  relative subresource resolution and HTML parsing only happen when the renderer agrees it
+  is standard.
 - `libcef.dll` resolution for a delay-loading module: the wrapper's scoped loader relocates
   `libcef.dll` **relative to the module/exe directory** — colocate the whole CEF runtime flat
   next to the host; set explicit `resources_dir_path`/`locales_dir_path` anyway.

@@ -1,13 +1,15 @@
 // SentinelUI host (ASI) — game hooks:
 //   * IDXGISwapChain::Present / ResizeBuffers — function-level detours via MinHook.
-//     Present uploads the latest shared-memory frame (written by the helper
-//     process) to the game's D3D11 texture and composites it (game thread).
-//   * WndProc subclass on the GTA V window — P1 hotkeys (F9 show/hide).
-//     Input capture routing to the helper arrives with the IPC layer (P2).
+//     Present pumps every layer's shared-memory frames and composites the
+//     visible stack (z order, premultiplied alpha) onto the backbuffer.
+//   * WndProc subclass on the GTA V window — P1 hotkeys (F9 show/hide, F10
+//     capture) + the issue #2 layer stack: captured input is routed per layer
+//     (keyboard -> focused layer, mouse -> topmost non-click-through layer).
 
 #include "hooks.h"
 #include "framesrc.h"
 #include "ipc.h"
+#include "layers.h"
 #include "renderer.h"
 #include "suilog.h"
 
@@ -24,11 +26,12 @@
 namespace sui_host {
 
 extern Renderer g_renderer;    // defined in host.cpp
-extern FrameSource g_frames;   // defined in host.cpp
+extern LayerTable g_layers;    // defined in host.cpp
 extern bool g_visible;         // defined in host.cpp
 extern bool g_framesReady;     // defined in host.cpp
 extern bool g_capture;         // defined in host.cpp
 void SetCaptureState(bool on); // defined in host.cpp
+void ToggleDemoLayer();        // defined in host.cpp
 
 namespace {
 
@@ -36,9 +39,9 @@ HWND g_gameWindow = nullptr;
 WNDPROC g_oldWndProc = nullptr;
 bool g_hooked = false;
 
-// Frame staging buffer (helper publishes up to 4K BGRA).
+// Frame staging buffer (shared scratch; helper publishes up to 4K BGRA per
+// layer — each layer's newest frame is copied in and uploaded immediately).
 std::vector<uint8_t> g_frameBuf;
-uint64_t g_lastGen = 0;
 
 typedef HRESULT(WINAPI* PresentFn)(IDXGISwapChain*, UINT, UINT);
 typedef HRESULT(WINAPI* ResizeFn)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
@@ -59,18 +62,27 @@ void SyncViewport() {
     g_lastIpcEpoch.store(epoch);
     SendCommand(std::string("V") + std::to_string(g_renderer.width()) + " " +
                 std::to_string(g_renderer.height()) + "\n");
+    // Re-assert the master visibility state after a helper (re)connect.
+    SendCommand(g_visible ? "A1\n" : "A0\n");
     SUI_LOG_INFO("viewport sync -> %dx%d (ipc epoch %d)", g_renderer.width(),
                  g_renderer.height(), epoch);
 }
 
 void ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
-    if (wParam != VK_F9 && wParam != VK_F10) return;
+    if (wParam != VK_F9 && wParam != VK_F10 && wParam != VK_F11) return;
     if (lParam & 0x40000000) return;  // auto-repeat
     if (wParam == VK_F9) {
         g_visible = !g_visible;
         SUI_LOG_INFO("F9: visibility -> %s", g_visible ? "visible" : "hidden");
-    } else {
+        // Pause/resume all helper pages so a hidden overlay is truly idle and a
+        // shown overlay repaints immediately. The host also force-uploads every
+        // layer's resident frame on the next Present, so all layers composite
+        // in the same frame (no per-layer stagger).
+        SendCommand(g_visible ? "A1\n" : "A0\n");
+    } else if (wParam == VK_F10) {
         SetCaptureState(!g_capture);
+    } else {
+        ToggleDemoLayer();  // F11: demo HUD layer (issue #2 acceptance)
     }
 }
 
@@ -98,8 +110,12 @@ void StartMousePolling() {
                     int px = g_lastCursorX.exchange(p.x);
                     int py = g_lastCursorY.exchange(p.y);
                     if (px != p.x || py != p.y) {
-                        SendCommand(std::string("M") + std::to_string(p.x) + " " +
-                                    std::to_string(p.y) + "\n");
+                        // Route to the topmost interactive (non-click-through) layer.
+                        int id = g_layers.MouseTarget();
+                        if (id) {
+                            SendCommand("M" + std::to_string(id) + " " + std::to_string(p.x) +
+                                        " " + std::to_string(p.y) + "\n");
+                        }
                     }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(8));
@@ -143,65 +159,80 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // Toggle hotkeys ONLY on keydown (keyup must not re-toggle).
             ToggleHotkeys(wParam, lParam);
             if (g_capture) {
-                UINT vk = (UINT)wParam;
-                UINT sc = (UINT)((lParam >> 16) & 0xff);
-                bool ext = (lParam >> 24) & 1;
-                SendCommand(std::string("K") + "1 " +
-                            std::to_string(vk) + " " + std::to_string(sc) + " " +
-                            (ext ? "1" : "0") + "\n");
-                return 0;
+                // Keyboard goes to the focused layer (else topmost interactive).
+                int id = g_layers.KeyTarget();
+                if (id) {
+                    UINT vk = (UINT)wParam;
+                    UINT sc = (UINT)((lParam >> 16) & 0xff);
+                    bool ext = (lParam >> 24) & 1;
+                    SendCommand("K" + std::to_string(id) + " 1 " + std::to_string(vk) + " " +
+                                std::to_string(sc) + " " + (ext ? "1" : "0") + "\n");
+                    return 0;
+                }
             }
             break;
         }
         case WM_KEYUP:
         case WM_SYSKEYUP:
             if (g_capture) {
-                UINT vk = (UINT)wParam;
-                UINT sc = (UINT)((lParam >> 16) & 0xff);
-                bool ext = (lParam >> 24) & 1;
-                SendCommand(std::string("K") + "0 " +
-                            std::to_string(vk) + " " + std::to_string(sc) + " " +
-                            (ext ? "1" : "0") + "\n");
-                return 0;
+                int id = g_layers.KeyTarget();
+                if (id) {
+                    UINT vk = (UINT)wParam;
+                    UINT sc = (UINT)((lParam >> 16) & 0xff);
+                    bool ext = (lParam >> 24) & 1;
+                    SendCommand("K" + std::to_string(id) + " 0 " + std::to_string(vk) + " " +
+                                std::to_string(sc) + " " + (ext ? "1" : "0") + "\n");
+                    return 0;
+                }
             }
             break;
         case WM_CHAR:
         case WM_SYSCHAR:
             if (g_capture) {
-                SendCommand(std::string("U") + std::to_string((int)wParam) + "\n");
-                return 0;
+                int id = g_layers.KeyTarget();
+                if (id) {
+                    SendCommand("U" + std::to_string(id) + " " + std::to_string((int)wParam) + "\n");
+                    return 0;
+                }
             }
             break;
-        case WM_MOUSEMOVE:
-            if (g_capture)
-                SendCommand(std::string("M") + std::to_string(Cx(lParam)) + " " +
+        case WM_MOUSEMOVE: {
+            int id = g_capture ? g_layers.MouseTarget() : 0;
+            if (id)
+                SendCommand("M" + std::to_string(id) + " " + std::to_string(Cx(lParam)) + " " +
                             std::to_string(Cy(lParam)) + "\n");
             break;
+        }
         case WM_MOUSEWHEEL:
             if (g_capture) {
-                int delta = (short)HIWORD(wParam);
-                POINT p = {Cx(lParam), Cy(lParam)};
-                ScreenToClient(hwnd, &p);
-                SendCommand(std::string("W") + std::to_string(delta) + " " +
-                            std::to_string(p.x) + " " + std::to_string(p.y) + "\n");
-                return 0;
+                int id = g_layers.MouseTarget();
+                if (id) {
+                    int delta = (short)HIWORD(wParam);
+                    POINT p = {Cx(lParam), Cy(lParam)};
+                    ScreenToClient(hwnd, &p);
+                    SendCommand("W" + std::to_string(id) + " " + std::to_string(delta) + " " +
+                                std::to_string(p.x) + " " + std::to_string(p.y) + "\n");
+                    return 0;
+                }
             }
             break;
         case WM_LBUTTONDOWN: case WM_LBUTTONUP:
         case WM_RBUTTONDOWN: case WM_RBUTTONUP:
-        case WM_MBUTTONDOWN: case WM_MBUTTONUP:
-            if (g_capture) {
+        case WM_MBUTTONDOWN: case WM_MBUTTONUP: {
+            int id = g_capture ? g_layers.MouseTarget() : 0;
+            if (id) {
                 bool down = (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN);
                 int button = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) ? 0 :
                              (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP) ? 2 : 1;
-                SendCommand(std::string("B") + std::to_string(button) + " " +
+                SendCommand("B" + std::to_string(id) + " " + std::to_string(button) + " " +
                             (down ? "1" : "0") + " " + std::to_string(Cx(lParam)) + " " +
                             std::to_string(Cy(lParam)) + "\n");
                 return 0;
             }
             break;
+        }
         case WM_SIZE:
-            g_renderer.Invalidate();   // re-create texture on next Present
+            g_renderer.Invalidate();   // re-create resources on next Present
             break;
         case WM_KILLFOCUS:
             SUI_LOG_INFO("WM_KILLFOCUS (alt-tab).");
@@ -223,14 +254,27 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
     }
     SyncViewport();
 
+    // First composited frame after any hidden period force-uploads every
+    // layer's resident frame so the whole stack lands in the same Present.
+    static bool s_wasComposited = false;
     if (g_framesReady && g_visible && g_renderer.ready()) {
         if (g_frameBuf.empty()) g_frameBuf.resize(4096 * 2160 * 4u);
-        uint64_t gen = g_lastGen;
-        if (g_frames.Take(g_frameBuf.data(), g_frameBuf.size(), gen)) {
-            g_renderer.UploadFrame(g_frameBuf.data(), (int)g_frames.width(), (int)g_frames.height());
-            g_lastGen = gen;
+        bool force = !s_wasComposited;
+        bool anyFresh = false;
+        for (const auto& f : g_layers.PumpFrames(g_frameBuf.data(), g_frameBuf.size(), force)) {
+            g_renderer.UploadLayer(f.id, g_frameBuf.data(), (int)f.width, (int)f.height);
+            anyFresh = true;
         }
-        g_renderer.DrawFrame(swapChain);
+        std::vector<int> order = g_layers.DrawOrder();
+        if (!order.empty()) g_renderer.DrawLayers(swapChain, order);
+        if (force) {
+            SUI_LOG_INFO("compositing %u layer(s) (forced upload=%d)", (unsigned)order.size(),
+                         anyFresh ? 1 : 0);
+        }
+        s_wasComposited = true;
+    } else {
+        if (s_wasComposited) SUI_LOG_INFO("compositing stopped (hidden/unavailable).");
+        s_wasComposited = false;
     }
 
     return g_origPresent(swapChain, syncInterval, flags);

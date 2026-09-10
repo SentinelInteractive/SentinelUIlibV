@@ -8,15 +8,22 @@
 //   boot thread              -> find game window -> install hooks -> start helper
 //                               -> open shared memory (frame source).
 //   SuiShutdown() (Bootstrap unload) -> stop helper, remove hooks.
+//
+// Layer stack (issue #2): layer 1 is the boot page (sentinelui://sui/p1_demo.html);
+// plugins add layers with SuiCreateLayer (ids >= 2). Every layer owns a frame
+// mapping; the Present hook composites the visible stack in z order and the
+// WndProc hook routes captured input to the focused/topmost interactive layer.
 
 #include "exports.h"
 #include "framesrc.h"
 #include "hooks.h"
 #include "ipc.h"
+#include "layers.h"
 #include "renderer.h"
 #include "suilog.h"
 
 #include <shellapi.h>
+#include <atomic>
 #include <string>
 #include <vector>
 #include <cstdio>
@@ -30,18 +37,20 @@ namespace sui_host {
 struct HostPaths {
     std::wstring moduleDir;
     std::wstring helperExe;
-    std::wstring contentFile;
+    std::wstring contentUrl;     // sentinelui:// URL of the boot layer
+    std::wstring contentDir;     // <game>\SentinelUI\content (default "sui" root)
     std::wstring cacheDir;
     std::wstring logDir;
     std::wstring shmName;
 };
 
 Renderer g_renderer;
-FrameSource g_frames;
-bool g_visible = true;
+FrameSource g_frames;            // legacy handle for the boot-layer mapping
+LayerTable g_layers;
+bool g_visible = true;           // master overlay toggle (F9)
 bool g_framesReady = false;
 bool g_shutdownRequested = false;
-bool g_capture = false;            // input capture (F10 / SuiSetCapture)
+bool g_capture = false;          // input capture (F10 / SuiSetCapture)
 HostPaths g_paths;
 HMODULE g_hinst = nullptr;
 
@@ -53,7 +62,8 @@ using namespace sui_host;
 
 // Pending helper process.
 HANDLE g_helperProcess = nullptr;
-std::vector<uint8_t> g_dummy;  // (unused; kept for symmetry)
+// F11 acceptance layer (sentinelui://sui/demo_hud.html) — 0 when not spawned.
+std::atomic<int> g_demoLayer{0};
 
 void Trace(const char* what);
 
@@ -128,7 +138,7 @@ std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
 void StartHelper() {
     std::wstring cmdline =
         Quote(g_paths.helperExe) +
-        L" --content=" + Quote(g_paths.contentFile) +
+        L" --content=" + Quote(g_paths.contentUrl) +
         L" --size=1280x720" +
         L" --shm=" + Quote(g_paths.shmName) +
         L" --logs=" + Quote(g_paths.logDir) +
@@ -146,20 +156,32 @@ void StartHelper() {
     CloseHandle(pi.hThread);
     SUI_LOG_INFO("Helper process started (pid %lu).", pi.dwProcessId);
 
-    // Wait (bounded) for the helper to create the shared memory mapping.
+    // Wait (bounded) for the helper to create the boot layer's shared memory.
     for (int i = 0; i < 50 && !g_shutdownRequested; ++i) {
         if (g_frames.Open(g_paths.shmName.c_str(), 4096, 2160)) {
             g_framesReady = true;
             SUI_LOG_INFO("Shared-memory frame source ready.");
-            return;
+            break;
         }
         Sleep(100);
     }
-    SUI_LOG_ERROR("Helper shared memory not available within 5s.");
+    if (!g_framesReady) {
+        SUI_LOG_ERROR("Helper shared memory not available within 5s.");
+        return;
+    }
+
+    // Boot layer (id 1) takes over the mapping opened above; the layer stack
+    // re-opens the same named mapping lazily (OS refcounts named mappings).
+    std::string url = ToUtf8(g_paths.contentUrl);
+    g_layers.CreateBase(url);
+    g_frames.Close();
+    SUI_LOG_INFO("Boot layer ready: %s", url.c_str());
 }
 
 void StopHelper() {
     g_framesReady = false;
+    g_layers.CloseAll();
+    g_demoLayer.store(0);
     g_frames.Close();
     if (g_helperProcess) {
         TerminateProcess(g_helperProcess, 0);
@@ -224,7 +246,7 @@ DWORD WINAPI BootThread(LPVOID) {
     StartHelper();
     if (!g_framesReady) { SUI_LOG_ERROR("Frames not available; overlay disabled."); }
 
-    SUI_LOG_INFO("Host ready. F9 toggle visibility.");
+    SUI_LOG_INFO("Host ready. F9 toggle visibility, F10 capture, F11 demo HUD layer.");
     return 0;
 }
 
@@ -249,6 +271,29 @@ void SetCaptureState(bool on) {
 }
 }  // namespace sui_host
 
+// ---- F11 demo layer (issue #2 in-game acceptance) ---------------------------
+namespace sui_host {
+void ToggleDemoLayer() {
+    // Existing layer: pure show/hide (instant — no browser create/reload).
+    int id = g_demoLayer.load();
+    if (id && g_layers.Exists(id)) {
+        LayerTable::Info info;
+        bool visible = g_layers.Get(id, info) && info.visible;
+        g_layers.SetVisible(id, !visible);
+        SUI_LOG_INFO("F11: demo HUD layer %d -> %s", id, visible ? "hidden" : "visible");
+        return;
+    }
+    // First press: create the HUD strip above the boot layer, click-through.
+    int created = g_layers.Create("sentinelui://sui/demo_hud.html");
+    if (created) {
+        g_layers.SetZ(created, 10);
+        g_layers.SetClickThrough(created, true);
+        g_demoLayer.store(created);
+        SUI_LOG_INFO("F11: demo HUD layer %d created (z 10, click-through).", created);
+    }
+}
+}  // namespace sui_host
+
 // ---- exported C API ----------------------------------------------------------
 
 extern "C" {
@@ -264,32 +309,93 @@ void SuiShutdown(void) { StopHost(); }
 
 // ---- issue #1 exports ----
 void SuiCmdVisible(int layerId, int visible) {
-    SendCommand(visible ? "S\n" : "H\n");
-    (void)layerId;   // single layer for now
+    if (layerId > 0) { sui_host::g_layers.SetVisible(layerId, visible != 0); return; }
+    SendCommand(visible ? "S\n" : "H\n");   // legacy no-id form (id 1 helper-side)
 }
 
 void SuiCmdFocus(int layerId, int keyboard, int mouse) {
+    if (layerId > 0) {
+        sui_host::g_layers.SetFocus(layerId, keyboard != 0, mouse != 0);
+        return;
+    }
     SendCommand(std::string("F") + (keyboard ? "1" : "0") + (mouse ? "1" : "0") + "\n");
-    (void)layerId;
 }
 
 void SuiExecuteJs(int layerId, const char* jsUtf8) {
     if (!jsUtf8) return;
     std::string js(jsUtf8);
-    SendCommand("J" + std::to_string(js.size()) + ":" + js + "\n");
-    (void)layerId;
+    int id = layerId > 0 ? layerId : LayerTable::kBaseLayerId;
+    SendCommand("J" + std::to_string(id) + " " + std::to_string(js.size()) + ":" + js + "\n");
 }
 
 void SuiCmdNavigate(int layerId, const char* urlUtf8) {
     if (!urlUtf8) return;
     std::string url(urlUtf8);
-    SendCommand("N" + std::to_string(url.size()) + ":" + url + "\n");
-    (void)layerId;
+    int id = layerId > 0 ? layerId : LayerTable::kBaseLayerId;
+    SendCommand("N" + std::to_string(id) + " " + std::to_string(url.size()) + ":" + url + "\n");
 }
 
 void SuiSetCapture(int enabled) { ::sui_host::SetCaptureState(enabled != 0); }
 int  SuiIsCaptureActive(void) { return g_capture ? 1 : 0; }
 void SuiRegisterEventSink(void (*cb)(const char* utf8)) { ::sui_host::SetEventSink(cb); }
+
+// ---- issue #2 exports (layer stack + content scheme) ----
+
+int SuiCreateLayer(const char* urlUtf8) {
+    if (!urlUtf8 || !*urlUtf8) return 0;
+    return sui_host::g_layers.Create(urlUtf8);
+}
+
+void SuiCloseLayer(int layerId) {
+    if (layerId <= 0) return;
+    int demo = g_demoLayer.load();
+    if (layerId == demo) g_demoLayer.store(0);
+    sui_host::g_layers.Close(layerId);
+}
+
+void SuiSetLayerVisible(int layerId, int visible) {
+    if (layerId <= 0) return;
+    sui_host::g_layers.SetVisible(layerId, visible != 0);
+}
+
+int SuiIsLayerVisible(int layerId) {
+    LayerTable::Info info;
+    return (layerId > 0 && sui_host::g_layers.Get(layerId, info)) ? (info.visible ? 1 : 0) : 0;
+}
+
+void SuiSetLayerZ(int layerId, int z) {
+    if (layerId <= 0) return;
+    sui_host::g_layers.SetZ(layerId, z);
+}
+
+int SuiGetLayerZ(int layerId) {
+    LayerTable::Info info;
+    if (layerId <= 0 || !sui_host::g_layers.Get(layerId, info)) return 0;
+    return info.z;
+}
+
+void SuiSetLayerClickThrough(int layerId, int enabled) {
+    if (layerId <= 0) return;
+    sui_host::g_layers.SetClickThrough(layerId, enabled != 0);
+}
+
+int SuiIsLayerClickThrough(int layerId) {
+    LayerTable::Info info;
+    return (layerId > 0 && sui_host::g_layers.Get(layerId, info)) ? (info.clickThrough ? 1 : 0) : 0;
+}
+
+void SuiReloadLayer(int layerId) {
+    if (layerId <= 0) return;
+    SendCommand("L" + std::to_string(layerId) + "\n");
+}
+
+int SuiRegisterContentRoot(const char* pluginUtf8, const char* rootPathUtf8) {
+    if (!pluginUtf8 || !*pluginUtf8 || !rootPathUtf8 || !*rootPathUtf8) return 0;
+    std::string body = std::string(pluginUtf8) + "|" + rootPathUtf8;
+    SendCommand("R" + std::to_string(body.size()) + ":" + body + "\n");
+    SUI_LOG_INFO("content root registered: sentinelui://%s/ -> %s", pluginUtf8, rootPathUtf8);
+    return 1;
+}
 
 }  // extern "C"
 
@@ -301,10 +407,14 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
         TraceF("dllmain: attach");
         g_paths.moduleDir = ModuleDir();
         g_paths.helperExe = g_paths.moduleDir + L"\\SentinelUI_Host.exe";
-        g_paths.contentFile = g_paths.moduleDir + L"\\SentinelUI\\content\\p1_demo.html";
+        g_paths.contentDir = g_paths.moduleDir + L"\\SentinelUI\\content";
+        // Boot layer rides the sentinelui:// scheme (issue #2). file:// is gone
+        // from the content path; the default "sui" root maps to content\.
+        g_paths.contentUrl = L"sentinelui://sui/p1_demo.html";
         g_paths.cacheDir = g_paths.moduleDir + L"\\SentinelUI\\cache";
         g_paths.logDir = g_paths.moduleDir + L"\\SentinelUI\\logs";
         g_paths.shmName = L"Local\\SentinelUI_Frames";
+        g_layers.SetShmBaseName(g_paths.shmName);
 
         HANDLE h = CreateThread(nullptr, 0, &BootThread, nullptr, 0, nullptr);
         TraceF("dllmain: boot thread created");

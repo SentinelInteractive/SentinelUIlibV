@@ -3,8 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>SentinelUI P1 demo</title>
-<style>
-  :root { --p1-bg: rgba(10,14,22,0.72); --p1-accent: #d92534; --p1-text: #e8edf5; }
+<style>  :root { --p1-bg: rgba(10,14,22,0.72); --p1-accent: #d92534; --p1-text: #e8edf5; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { width: 100%; height: 100%; background: transparent; }
   body {
@@ -34,36 +33,19 @@
 </head>
 <body>
   <div class="panel">
-    <h1>SentinelUI — P1 in-game host</h1>
-    <div class="sub">CEF 144 · transparent OSR · software path · dedicated thread</div>
+    <h1>SentinelUI — P2 layer stack</h1>
+    <div class="sub">sentinelui://sui/p1_demo.html · CEF 144 · layer 1 (boot layer)</div>
     <div class="row">
       <div class="clock" id="clock">--:--:--</div>
       <button class="btn" id="ping">Ping host (console.log)</button>
       <button class="btn" id="togglebg">Toggle panel</button>
     </div>
     <div id="logline"></div>
-    <div class="hint">F9 = show/hide layer · F10 = capture/release input (mouse+keys)</div>
+    <div class="hint">F9 = show/hide · F10 = capture input · F11 = toggle demo HUD layer (z 10, click-through)</div>
   </div>
 
-<script>
-  const clock = document.getElementById('clock');
-  const logline = document.getElementById('logline');
-  const panel = document.querySelector('.panel');
-
-  function pad(n) { return String(n).padStart(2, '0'); }
-  setInterval(() => {
-    const d = new Date();
-    clock.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-  }, 1000);
-
-  document.getElementById('ping').addEventListener('click', () => {
-    console.log('NUI_TEST:p1-button-clicked');
-    logline.textContent = 'clock is live (JS repaint works)';
-  });
-  document.getElementById('togglebg').addEventListener('click', () => {
-    const bg = getComputedStyle(panel).backgroundColor;
-    panel.style.background = bg.indexOf('0.72') !== -1 ? 'rgba(10,14,22,0.96)' : 'rgba(10,14,22,0.72)';
-  });
-</script>
+  <!-- External script: the sentinelui:// scheme enforces script-src 'self' (CSP-tight).
+       Inline scripts are blocked by design; pages ship their JS as files. -->
+  <script src="p1_demo.js"></script>
 </body>
 </html>

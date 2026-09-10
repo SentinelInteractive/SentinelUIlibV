@@ -1,9 +1,9 @@
 {
   "name": "SentinelUI",
   "manifest": 1,
-  "hostExports": 2,
-  "apiAssembly": "0.1.0",
-  "bootstrapAssembly": "0.1.0",
+  "hostExports": 3,
+  "apiAssembly": "0.2.0",
+  "bootstrapAssembly": "0.2.0",
   "envelope": 1,
   "cef": "144.0.34+g8fc21c8+chromium-144.0.7559.261",
   "minRphSdk": "1.124.0",

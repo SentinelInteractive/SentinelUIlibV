@@ -19,6 +19,7 @@ add_library(sentinel_asi SHARED
   suilog.cpp
   hooks.cpp
   ipc.cpp
+  layers.cpp
   renderer.cpp)
 set_target_properties(sentinel_asi PROPERTIES
   PREFIX ""

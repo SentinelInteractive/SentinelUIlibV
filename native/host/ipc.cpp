@@ -40,7 +40,9 @@ std::atomic<int> g_epoch{0};           // bumped on every helper connect
 void (*g_sink)(const char*) = nullptr;
 
 HANDLE CreateWaiter(HANDLE* outEvent) {
-    HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    // Auto-reset: waited-on once per pending operation; a manual-reset event
+    // stays signaled and makes later waits return before completion.
+    HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (outEvent) *outEvent = ev;
     return ev;
 }
@@ -92,18 +94,29 @@ void FlushOut(HANDLE pipe) {
     for (auto it = batch.begin(); it != batch.end(); ++it) {
         DWORD written = 0;
         const std::string& line = *it;
+        bool failed = false;
+        DWORD err = 0;
         if (!WriteFile(pipe, line.data(), (DWORD)line.size(), &written, &wo)) {
-            DWORD err = GetLastError();
+            err = GetLastError();
             if (err == ERROR_IO_PENDING) {
-                if (WaitForSingleObject(wo.hEvent, 2000) == WAIT_OBJECT_0) {
+                DWORD w = WaitForSingleObject(wo.hEvent, 2000);
+                if (w == WAIT_OBJECT_0) {
                     if (GetOverlappedResult(pipe, &wo, &written, FALSE)) continue;
                     err = GetLastError();
+                } else if (w == WAIT_TIMEOUT) {
+                    err = WAIT_TIMEOUT;
                 }
             }
+            failed = true;
+        }
+        if (failed) {
             static std::atomic<DWORD> s_lastErr{0};
             if (s_lastErr.exchange(err) != err)
                 SUI_LOG_ERROR("IPC write failed (%lu) — command requeued for reconnect.", err);
             CancelIoEx(pipe, &wo);
+            // Retire the cancelled OVERLAPPED before it goes out of scope / is
+            // reused (a pending op writing into freed stack memory corrupts).
+            WaitForSingleObject(wo.hEvent, 2000);
             GetOverlappedResult(pipe, &wo, &written, FALSE);
             Requeue(it, batch);
             break;
@@ -130,12 +143,19 @@ void AcceptLoop() {
         co.hEvent = coEv;
 
         bool connected = false;
+        bool connectPending = false;
         for (;;) {
             if (g_stop) break;
-            if (ConnectNamedPipe(pipe, &co)) { connected = true; break; }
-            DWORD err = GetLastError();
-            if (err == ERROR_PIPE_CONNECTED) { connected = true; break; }  // raced in
-            if (err != ERROR_IO_PENDING) break;                            // unusable instance
+            if (!connectPending) {
+                if (ConnectNamedPipe(pipe, &co)) { connected = true; break; }
+                DWORD err = GetLastError();
+                if (err == ERROR_PIPE_CONNECTED) { connected = true; break; }  // raced in
+                if (err != ERROR_IO_PENDING) break;                            // unusable instance
+                connectPending = true;
+            }
+            // Still pending: wait (bounded) and NEVER re-issue while pending —
+            // overlapping a second ConnectNamedPipe on the same OVERLAPPED is
+            // undefined behaviour.
             if (WaitForSingleObject(co.hEvent, 250) == WAIT_OBJECT_0) {
                 DWORD n = 0;
                 connected = GetOverlappedResult(pipe, &co, &n, FALSE) != FALSE;
@@ -161,20 +181,27 @@ void AcceptLoop() {
         std::string acc;
         char buf[4096];
         bool broken = false;
+        bool readPending = false;
         for (;;) {
             if (g_stop) break;
             DWORD n = 0;
-            if (!ReadFile(pipe, buf, sizeof(buf), &n, &ro)) {
-                DWORD err = GetLastError();
-                if (err == ERROR_IO_PENDING) {
-                    DWORD w = WaitForSingleObject(ro.hEvent, 250);
-                    if (w == WAIT_TIMEOUT) continue;       // connected; keep waiting
-                    if (w != WAIT_OBJECT_0) { broken = true; break; }
-                    if (!GetOverlappedResult(pipe, &ro, &n, FALSE)) { broken = true; break; }
+            if (!readPending) {
+                if (ReadFile(pipe, buf, sizeof(buf), &n, &ro)) {
+                    // Completed synchronously; fall through to buffering below.
                 } else {
-                    broken = true;                          // broken pipe / other error
-                    break;
+                    DWORD err = GetLastError();
+                    if (err != ERROR_IO_PENDING) { broken = true; break; }
+                    readPending = true;
                 }
+            }
+            if (readPending) {
+                // Bounded wait so g_stop/disconnects are observed; keep waiting on
+                // timeout — re-issuing ReadFile over a pending OVERLAPPED corrupts data.
+                DWORD w = WaitForSingleObject(ro.hEvent, 250);
+                if (w == WAIT_TIMEOUT) continue;
+                if (w != WAIT_OBJECT_0) { broken = true; break; }
+                if (!GetOverlappedResult(pipe, &ro, &n, FALSE)) { broken = true; break; }
+                readPending = false;
             }
             if (n == 0) continue;
             acc.append(buf, n);
@@ -183,6 +210,16 @@ void AcceptLoop() {
                 std::string line = acc.substr(0, nl);
                 acc.erase(0, nl + 1);
                 if (line.empty()) continue;
+                // Event envelope: "E<len>:<body>" — unwrap so the sink/managed side
+                // only ever sees "<layerId>|<kind>:<body>".
+                if (line[0] == 'E') {
+                    size_t colon = line.find(':');
+                    if (colon != std::string::npos) {
+                        int len = atoi(line.substr(1, colon - 1).c_str());
+                        if (len >= 0 && colon + 1 + (size_t)len <= line.size())
+                            line = line.substr(colon + 1, (size_t)len);
+                    }
+                }
                 {
                     std::lock_guard<std::mutex> lock(g_inMutex);
                     g_inQueue.push_back(line);

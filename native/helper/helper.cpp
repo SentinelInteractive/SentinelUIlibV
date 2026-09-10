@@ -1,14 +1,18 @@
 // SentinelUI_Host.exe — dedicated CEF host process.
 // EXE-hosted (harness-proven): own process, dedicated CEF thread, transparent OSR,
-// frames -> named shared memory for the in-game ASI compositor. Own process also
-// means a page/browser crash can never take the game down.
+// per-layer frames -> named shared memory for the in-game ASI compositor. Own
+// process also means a page/browser crash can never take the game down.
+//
+// Issue #2: the boot layer loads through the sentinelui:// content scheme
+// (default root "sui" -> <exe dir>\SentinelUI\content); additional layers are
+// created on demand by the ASI over the command pipe.
 
 #include <windows.h>
 
 #include "include/cef_app.h"
 
 #include "helper_app.h"
-#include "shm.h"
+#include "scheme.h"
 #include "suilog.h"
 
 #include <cwchar>
@@ -53,8 +57,11 @@ std::wstring ModuleDir() {
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // CEF subprocess dispatch (this exe doubles as renderer/utility child).
+    // The app is passed in so subprocesses register the sentinelui:// standard
+    // scheme too (required for consistent scheme handling across processes).
     CefMainArgs mainArgs(hInstance);
-    int subprocessExit = CefExecuteProcess(mainArgs, nullptr, nullptr);
+    CefRefPtr<SuiHelperApp> subprocessApp(new SuiHelperApp());
+    int subprocessExit = CefExecuteProcess(mainArgs, subprocessApp.get(), nullptr);
     if (subprocessExit >= 0) return subprocessExit;
 
     std::wstring cmdline = GetCommandLineW();
@@ -89,8 +96,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
                  cfg.contentFile.c_str(), cfg.shmName.c_str(), cfg.viewWidth, cfg.viewHeight,
                  cfg.selftest ? 1 : 0);
 
+    // Default content root for the scheme: plugin "sui" -> <exe dir>\SentinelUI\content.
+    Roots().SetDefaultRoot(cfg.moduleDir + L"\\SentinelUI\\content");
+
     // IPC: connect to the ASI's pipe, start the reader, then register handling
-    // of ASI->helper commands (input, exec-js, show/hide, viewport, ...).
+    // of ASI->helper commands (layer create/close, input, exec-js, viewport, ...).
     if (!cfg.selftest) {
         std::wstring err = StartIpc(cfg.pipeName);
         if (err.empty()) {
@@ -101,15 +111,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         }
     }
 
-    FrameShm shm;
-    if (!shm.Open(cfg.shmName.c_str(), 4096, 2160)) {
-        SUI_LOG_ERROR("shared memory open failed: %ls", cfg.shmName.c_str());
-        return 5;
-    }
-    SUI_LOG_INFO("shared memory ready.");
-
-    int rc = RunBrowserProcess(cfg, &shm);
-    shm.Close();
+    int rc = RunBrowserProcess(cfg);
     StopIpc();
     SUI_LOG_INFO("SentinelUI_Host exiting (%d).", rc);
     return rc;

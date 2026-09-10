@@ -80,6 +80,22 @@ namespace SentinelUI
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void SuiEventSinkNative([MarshalAs(UnmanagedType.LPStr)] string line);
 
+        // ---- issue #2 exports (layer stack + content scheme) ----
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SuiCreateLayerDelegate([MarshalAs(UnmanagedType.LPStr)] string urlUtf8);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiCloseLayerDelegate(int layerId);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SuiRegisterRootDelegate(
+            [MarshalAs(UnmanagedType.LPStr)] string pluginUtf8,
+            [MarshalAs(UnmanagedType.LPStr)] string rootPathUtf8);
+
+        // Layer-state queries: int(int) — native takes the layer id.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SuiLayerQueryDelegate(int layerId);
+
         private static SuiCmdDelegate _cmdVisible;
         private static SuiCmdFocusDelegate _cmdFocus;
         private static SuiJsDelegate _execJs;
@@ -88,6 +104,17 @@ namespace SentinelUI
         private static SuiGetApiVersionDelegate _isCaptureActive;
         private static SuiSinkRegisterDelegate _registerSink;
         private static SuiEventSinkNative _sinkDelegate;   // kept alive (GC guard)
+
+        private static SuiCreateLayerDelegate _createLayer;
+        private static SuiCloseLayerDelegate _closeLayer;
+        private static SuiCmdDelegate _setLayerVisible;
+        private static SuiLayerQueryDelegate _isLayerVisible;
+        private static SuiCmdDelegate _setLayerZ;
+        private static SuiLayerQueryDelegate _getLayerZ;
+        private static SuiCmdDelegate _setLayerClickThrough;
+        private static SuiLayerQueryDelegate _isLayerClickThrough;
+        private static SuiCloseLayerDelegate _reloadLayer;
+        private static SuiRegisterRootDelegate _registerContentRoot;
 
         private static IntPtr _module;
         private static int _apiVersion;
@@ -139,6 +166,18 @@ namespace SentinelUI
                 _setCapture = LoadExport<SuiCaptureDelegate>("SuiSetCapture");
                 _isCaptureActive = LoadExport<SuiGetApiVersionDelegate>("SuiIsCaptureActive");
                 _registerSink = LoadExport<SuiSinkRegisterDelegate>("SuiRegisterEventSink");
+
+                // issue #2 exports (additive; absent on older hosts -> layer model unavailable)
+                _createLayer = LoadExport<SuiCreateLayerDelegate>("SuiCreateLayer");
+                _closeLayer = LoadExport<SuiCloseLayerDelegate>("SuiCloseLayer");
+                _setLayerVisible = LoadExport<SuiCmdDelegate>("SuiSetLayerVisible");
+                _isLayerVisible = LoadExport<SuiLayerQueryDelegate>("SuiIsLayerVisible");
+                _setLayerZ = LoadExport<SuiCmdDelegate>("SuiSetLayerZ");
+                _getLayerZ = LoadExport<SuiLayerQueryDelegate>("SuiGetLayerZ");
+                _setLayerClickThrough = LoadExport<SuiCmdDelegate>("SuiSetLayerClickThrough");
+                _isLayerClickThrough = LoadExport<SuiLayerQueryDelegate>("SuiIsLayerClickThrough");
+                _reloadLayer = LoadExport<SuiCloseLayerDelegate>("SuiReloadLayer");
+                _registerContentRoot = LoadExport<SuiRegisterRootDelegate>("SuiRegisterContentRoot");
 
                 if (_apiVersion < 1)
                 {
@@ -197,6 +236,34 @@ namespace SentinelUI
             IntPtr fnPtr = Marshal.GetFunctionPointerForDelegate(_sinkDelegate);
             _registerSink(fnPtr);
         }
+
+        // ---- issue #2 API (layer stack + content scheme; host v3+) ----
+        public static bool SupportsLayerModel => _createLayer != null && _closeLayer != null;
+
+        public static int CreateLayer(string url) => _createLayer != null ? _createLayer(url) : 0;
+
+        public static void CloseLayer(int layerId) => _closeLayer?.Invoke(layerId);
+
+        public static void SetLayerVisible(int layerId, bool visible) =>
+            _setLayerVisible?.Invoke(layerId, visible ? 1 : 0);
+
+        public static bool IsLayerVisible(int layerId) =>
+            _isLayerVisible != null && _isLayerVisible(layerId) != 0;
+
+        public static void SetLayerZ(int layerId, int z) => _setLayerZ?.Invoke(layerId, z);
+
+        public static int GetLayerZ(int layerId) => _getLayerZ != null ? _getLayerZ(layerId) : 0;
+
+        public static void SetLayerClickThrough(int layerId, bool enabled) =>
+            _setLayerClickThrough?.Invoke(layerId, enabled ? 1 : 0);
+
+        public static bool IsLayerClickThrough(int layerId) =>
+            _isLayerClickThrough != null && _isLayerClickThrough(layerId) != 0;
+
+        public static void ReloadLayer(int layerId) => _reloadLayer?.Invoke(layerId);
+
+        public static bool RegisterContentRoot(string plugin, string rootPath) =>
+            _registerContentRoot != null && _registerContentRoot(plugin, rootPath) != 0;
 
         /// <summary>Drains host event queues. MUST be called on the game thread (per-frame).</summary>
         public static void PumpEvents()

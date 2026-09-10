@@ -32,15 +32,34 @@ namespace SentinelUI
 
         internal static void DispatchRawEvent(string line)
         {
-            // line format: "<kind>:<body>" from the helper (e.g. console:NUI_...)
-            int colon = line.IndexOf(':');
-            string kind = colon < 0 ? line : line.Substring(0, colon);
-            string body = colon < 0 ? string.Empty : line.Substring(colon + 1);
+            // Line format (v3): "<nativeLayerId>|<kind>:<body>" (e.g. "1|console:NUI_...").
+            // Legacy two-part lines (no id prefix) broadcast to every layer.
+            int bar = line.IndexOf('|');
+            int nativeId = 0;
+            string rest = line;
+            if (bar > 0 && int.TryParse(line.Substring(0, bar), out nativeId))
+                rest = line.Substring(bar + 1);
+
+            int colon = rest.IndexOf(':');
+            string kind = colon < 0 ? rest : rest.Substring(0, colon);
+            string body = colon < 0 ? string.Empty : rest.Substring(colon + 1);
 
             SuiMessage msg = new SuiMessage { Type = kind, PayloadJson = body };
             lock (Gate)
             {
-                foreach (var layer in Layers) layer.RaiseMessage(msg);
+                if (nativeId > 0)
+                {
+                    // Route to the owning layer (fall back to broadcast when unknown).
+                    SuiLayer target = null;
+                    foreach (var l in Layers)
+                        if (l.NativeId == nativeId) { target = l; break; }
+                    if (target != null) target.RaiseMessage(msg);
+                    else foreach (var layer in Layers) layer.RaiseMessage(msg);
+                }
+                else
+                {
+                    foreach (var layer in Layers) layer.RaiseMessage(msg);
+                }
             }
             MessageReceived?.Invoke(msg);
         }
@@ -88,22 +107,57 @@ namespace SentinelUI
         }
 
         /// <summary>
-        /// Creates a UI layer from a URL (sentinelui://plugin/page.html, or an https:// URL if the
-        /// plugin explicitly opted into remote content) or from raw HTML markup.
-        /// Returns null (with a logged warning) when the host is unavailable — plugins must handle
-        /// null so the game keeps running without the SentinelUI runtime installed.
+        /// Creates a UI layer from a URL — <c>sentinelui://&lt;plugin&gt;/&lt;path&gt;</c> for
+        /// plugin content (root registered via <see cref="RegisterContentRoot"/>), or an
+        /// https:// URL if the plugin explicitly opted into remote content. The boot layer
+        /// uses <c>sentinelui://sui/p1_demo.html</c> (shipped demo content).
+        /// Returns null (with a logged warning) when the host is unavailable, the layer
+        /// budget is exhausted, or the URL was refused — plugins must handle null so the
+        /// game keeps running without the SentinelUI runtime installed.
+        /// Raw HTML (<c>CreateLayerFromHtml</c>) lands with the P3 managed API work.
         /// </summary>
-        public static SuiLayer CreateLayer(string urlOrHtml)
+        public static SuiLayer CreateLayer(string url)
         {
             if (!HostAvailable) { SuiLog.Warn("CreateLayer ignored: host unavailable."); return null; }
+            if (string.IsNullOrWhiteSpace(url)) { SuiLog.Warn("CreateLayer ignored: empty URL."); return null; }
+            if (url.TrimStart().StartsWith("<", StringComparison.Ordinal))
+            {
+                SuiLog.Warn("CreateLayer: raw HTML needs CreateLayerFromHtml (P3); refusing: " +
+                            Truncate(url, 60));
+                return null;
+            }
             lock (Gate)
             {
-                var layer = new SuiLayer(urlOrHtml);
+                int nativeId = NativeHost.CreateLayer(url);
+                if (nativeId <= 0)
+                {
+                    SuiLog.Warn($"CreateLayer refused by host (budget/bad URL): {Truncate(url, 80)}");
+                    return null;
+                }
+                var layer = new SuiLayer(nativeId, url);
                 Layers.Add(layer);
-                SuiLog.Info($"Layer created (managed id {layer.Id}): {Truncate(urlOrHtml, 80)}");
-                // TODO(P2): NativeHost.SuiCreateLayer(...) and map native layer id.
+                SuiLog.Info($"Layer created (native id {layer.NativeId}): {Truncate(url, 80)}");
                 return layer;
             }
+        }
+
+        /// <summary>
+        /// Registers a plugin content root for the sentinelui:// scheme:
+        /// <c>sentinelui://&lt;pluginName&gt;/&lt;file&gt;</c> serves files from <paramref name="rootPath"/>.
+        /// Local-only: traversal outside the root is refused by the helper.
+        /// </summary>
+        public static bool RegisterContentRoot(string pluginName, string rootPath)
+        {
+            if (!HostAvailable)
+            {
+                SuiLog.Warn("RegisterContentRoot ignored: host unavailable.");
+                return false;
+            }
+            bool ok = NativeHost.RegisterContentRoot(pluginName, rootPath);
+            SuiLog.Info(ok
+                ? $"Content root registered: sentinelui://{pluginName}/ -> {rootPath}"
+                : $"Content root rejected: {pluginName} -> {rootPath}");
+            return ok;
         }
 
         /// <summary>Drains host event queues. Call once per game frame from the game thread
@@ -136,46 +190,55 @@ namespace SentinelUI
     /// <summary>One web UI surface on the host layer stack.</summary>
     public sealed class SuiLayer
     {
-        private static long _nextId;
+        private static long _nextManagedId;
 
-        /// <summary>Managed-side handle (native layer id mapping lands in P2).</summary>
+        /// <summary>Managed-side handle (stable across sessions, for dictionary keys).</summary>
         public long Id { get; }
 
-        /// <summary>The URL or raw HTML this layer was created from.</summary>
+        /// <summary>Native layer id (what the host exports take). Native ids start at 1
+        /// (the boot layer) and are never reused within a session.</summary>
+        public int NativeId { get; }
+
+        /// <summary>The URL this layer was created from.</summary>
         public string Source { get; }
 
-        /// <summary>Raised for messages posted from the page (JSON envelope payload).</summary>
+        /// <summary>Raised for messages posted from this layer's page.</summary>
         public event Action<SuiMessage> Message;
 
-        internal SuiLayer(string source)
+        internal SuiLayer(int nativeId, string source)
         {
-            Id = Interlocked.Increment(ref _nextId);
+            Id = Interlocked.Increment(ref _nextManagedId);
+            NativeId = nativeId;
             Source = source;
         }
 
-        public void SetVisible(bool visible)
-        {
-            NativeHost.CmdVisible((int)Id, visible);
-        }
+        public void SetVisible(bool visible) => NativeHost.SetLayerVisible(NativeId, visible);
 
-        public void SetFocus(bool keyboard, bool mouse)
-        {
-            NativeHost.CmdFocus((int)Id, keyboard, mouse);
-        }
+        public bool IsVisible => NativeHost.IsLayerVisible(NativeId);
 
-        public void SetClickThrough(bool enabled)
-        {
-            // P2: click-through per layer arrives with the layer stack.
-        }
+        public void SetFocus(bool keyboard, bool mouse) =>
+            NativeHost.CmdFocus(NativeId, keyboard, mouse);
 
-        public void ExecuteJs(string javascript)
-        {
-            NativeHost.ExecuteJs((int)Id, javascript);
-        }
+        /// <summary>Stacking order. Higher z composites above lower z (ties: creation order).</summary>
+        public void SetZ(int z) => NativeHost.SetLayerZ(NativeId, z);
+
+        public int Z => NativeHost.GetLayerZ(NativeId);
+
+        /// <summary>Click-through layers composite normally but never receive input;
+        /// clicks "fall through" to the next interactive layer below.</summary>
+        public void SetClickThrough(bool enabled) => NativeHost.SetLayerClickThrough(NativeId, enabled);
+
+        public bool IsClickThrough => NativeHost.IsLayerClickThrough(NativeId);
+
+        /// <summary>Re-navigates to <see cref="Source"/> — content is re-read from disk
+        /// (hot reload; responses are served no-store).</summary>
+        public void Reload() => NativeHost.ReloadLayer(NativeId);
+
+        public void ExecuteJs(string javascript) => NativeHost.ExecuteJs(NativeId, javascript);
 
         public void Send(object payload)
         {
-            // Interim: JS postMessage bridge (JSON envelope arrives with the scheme in P2).
+            // JS postMessage bridge: the page receives the JSON envelope on window.message.
             string json;
             try
             {
@@ -186,12 +249,12 @@ namespace SentinelUI
                 json = null;
             }
             if (json != null)
-                NativeHost.ExecuteJs((int)Id, "window.postMessage(" + json + ", '*')");
+                NativeHost.ExecuteJs(NativeId, "window.postMessage(" + json + ", '*')");
         }
 
         public void Close()
         {
-            // TODO(P2): NativeHost.SuiCloseLayer(...)
+            NativeHost.CloseLayer(NativeId);
             Sui.RemoveLayer(this);
         }
 

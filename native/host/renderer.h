@@ -1,5 +1,7 @@
-// D3D11 overlay renderer: uploads the latest CEF BGRA frame to a texture on the
-// game's device and composites it as a fullscreen premultiplied-alpha quad in the
+// D3D11 overlay renderer: per-layer textures + z-ordered composite (issue #2).
+// Each layer's newest BGRA frame (from its own shared-memory mapping) is
+// uploaded into a texture on the game's device; DrawLayers composites the
+// visible stack back-to-front as fullscreen premultiplied-alpha quads in the
 // Present hook (game thread). Single-device design — no cross-device sharing.
 
 #pragma once
@@ -9,6 +11,7 @@
 #include <d3d11.h>
 #include <windows.h>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace sui_host {
@@ -18,57 +21,56 @@ public:
     Renderer() = default;
 
     // Initialize once from the game's swapchain (called inside the first Present).
-    // Recreates device resources if the backbuffer changed.
+    // Creates the shared quad/shader state; per-layer textures arrive with
+    // UploadLayer. Recreates everything if the backbuffer changed.
     bool EnsureResources(IDXGISwapChain* swapChain);
 
-    // Upload a new BGRA frame into the overlay texture (no-op if null/small).
-    void UploadFrame(const uint8_t* data, int width, int height) {
-        if (!ready_ || context_ == nullptr || data == nullptr || width <= 0 || height <= 0) return;
-        D3D11_BOX box = {};
-        box.left = 0;
-        box.top = 0;
-        box.right = (UINT)width;
-        box.bottom = (UINT)height;
-        box.front = 0;
-        box.back = 1;
-        context_->UpdateSubresource(frameTex_, 0, &box, data, (UINT)width * 4, 0);
-    }
+    // Upload a layer's BGRA frame into its texture (creating/recreating it when
+    // the frame size changed). No-op when the data is null/small.
+    void UploadLayer(int layerId, const uint8_t* data, int width, int height);
 
-    // Draw the current overlay texture onto the swapchain backbuffer (game thread).
-    void DrawFrame(IDXGISwapChain* swapChain);
+    // Drop a layer's texture (layer closed).
+    void RemoveLayer(int layerId);
 
-    int width() const { return texWidth_; }
-    int height() const { return texHeight_; }
+    // Composite the given layers (back-to-front order) onto the backbuffer.
+    void DrawLayers(IDXGISwapChain* swapChain, const std::vector<int>& layerIds);
 
-    // Forget resources after ResizeBuffers (recreate lazily).
-    void Invalidate() { ready_ = false; }
+    // Forget all resources after ResizeBuffers/device loss (recreated lazily).
+    void Invalidate();
 
     bool ready() const { return ready_; }
+    int width() const { return backWidth_; }
+    int height() const { return backHeight_; }
 
 private:
-    bool CreateQuadResources(ID3D11Device* device, int width, int height);
+    bool CreateSharedResources(ID3D11Device* device, int backWidth, int backHeight);
     void ReleaseResources();
+    ID3D11ShaderResourceView* LayerSrv(int layerId);
+
+    struct LayerTex {
+        ID3D11Texture2D* tex = nullptr;
+        ID3D11ShaderResourceView* srv = nullptr;
+        int width = 0;
+        int height = 0;
+    };
 
     bool ready_ = false;
-    int texWidth_ = 0;
-    int texHeight_ = 0;
+    int backWidth_ = 0;
+    int backHeight_ = 0;
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
-    ID3D11Texture2D* frameTex_ = nullptr;
     ID3D11VertexShader* vs_ = nullptr;
     ID3D11PixelShader* ps_ = nullptr;
     ID3D11Buffer* vbo_ = nullptr;
     ID3D11SamplerState* sampler_ = nullptr;
     ID3D11BlendState* blend_ = nullptr;
     ID3D11InputLayout* layout_ = nullptr;
-    // Cached views: creating RTV/SRV per frame is driver churn (BSOD/D1 risk).
+    // Cached RTV: creating it per frame is driver churn (BSOD/D1 risk).
     ID3D11RenderTargetView* cachedRtv_ = nullptr;
     IUnknown* cachedRtvBack_ = nullptr;   // backbuffer this RTV belongs to
-    ID3D11ShaderResourceView* cachedSrv_ = nullptr;
-    uint64_t uploadedGeneration_ = 0;   // (frames carry generation in hooks.cpp)
-    int lastW_ = 0;
-    int lastH_ = 0;
+
+    std::unordered_map<int, LayerTex> layers_;
 };
 
 }  // namespace sui_host

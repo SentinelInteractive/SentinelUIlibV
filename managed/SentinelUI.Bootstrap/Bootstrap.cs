@@ -56,7 +56,7 @@ namespace SentinelUI.Bootstrap
         {
             try
             {
-                Game.LogTrivial("[SentinelUI] Bootstrap loading (API 0.1.0)...");
+                Game.LogTrivial("[SentinelUI] Bootstrap loading (API 0.2.0)...");
 
                 var hostPath = ResolveHostPath();
                 if (hostPath == null)

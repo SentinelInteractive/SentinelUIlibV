@@ -17,6 +17,7 @@ HANDLE g_pipe = INVALID_HANDLE_VALUE;
 std::thread g_readerThread;
 std::thread g_writerThread;
 std::atomic<bool> g_stop{false};
+std::atomic<bool> g_connected{false};
 
 // Outbound event queue (writer flushes on the reader thread to keep it simple).
 std::mutex g_outMutex;
@@ -37,6 +38,9 @@ void WriteLineBlocking(HANDLE pipe, const std::string& line, OVERLAPPED& wo) {
         return;
     }
     CancelIoEx(pipe, &wo);
+    // Wait for the cancellation to retire the OVERLAPPED before it is reused
+    // by the next write (reuse while pending corrupts the stream).
+    WaitForSingleObject(wo.hEvent, 2000);
     GetOverlappedResult(pipe, &wo, &written, FALSE);
 }
 
@@ -47,8 +51,14 @@ void FlushOut() {
         if (g_outQueue.empty()) return;
         batch.swap(g_outQueue);
     }
-    if (g_pipe == INVALID_HANDLE_VALUE) return;
-    static HANDLE s_ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    // No pipe (reconnecting): keep the batch for the next connection.
+    if (g_pipe == INVALID_HANDLE_VALUE) {
+        std::lock_guard<std::mutex> lock(g_outMutex);
+        g_outQueue.insert(g_outQueue.begin(), batch.begin(), batch.end());
+        return;
+    }
+    // Auto-reset event: each pending write gets its own wait.
+    static HANDLE s_ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     static OVERLAPPED s_wo = {};     // single writer thread: safe to reuse
     s_wo.hEvent = s_ev;
     for (const auto& line : batch) {
@@ -72,10 +82,12 @@ void ReaderLoop() {
     // Real OVERLAPPED read with a bounded wait: ReadFile with lpOverlapped=NULL
     // on an overlapped handle is documented to misreport completion and was
     // observed to leave commands sitting in the pipe (in-game + probe flakes).
+    // Auto-reset event + a pending flag: a timeout keeps the outstanding read
+    // alive (re-issuing over a pending OVERLAPPED corrupts the command stream).
     std::string acc;
     char buf[4096];
     OVERLAPPED ov = {};
-    ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    ov.hEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     bool pending = false;
     while (!g_stop) {
         if (!pending) {
@@ -101,9 +113,11 @@ void ReaderLoop() {
         pending = false;
         DWORD n = 0;
         if (!GetOverlappedResult(g_pipe, &ov, &n, FALSE)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));  // broken pipe
+            g_connected = false;           // broken pipe; watchdog decides to exit
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
             continue;
         }
+        g_connected = true;
         if (n > 0) {
             acc.append(buf, n);
             ProcessLines(acc);
@@ -123,6 +137,8 @@ void WriterLoop() {
 }  // namespace
 
 void SetCommandHandler(void (*fn)(const std::string&)) { g_onCommand = fn; }
+
+bool IpcConnected() { return g_connected.load(); }
 
 void IpcSendEvent(const std::string& utf8Body) {
     if (g_pipe == INVALID_HANDLE_VALUE) return;
@@ -145,6 +161,7 @@ std::wstring StartIpc(const std::wstring& pipeName) {
         if (g_pipe == INVALID_HANDLE_VALUE) std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     if (g_pipe == INVALID_HANDLE_VALUE) return L"IPC connect failed";
+    g_connected = true;
     g_readerThread = std::thread(&ReaderLoop);
     g_writerThread = std::thread(&WriterLoop);
     return L"";
@@ -152,6 +169,7 @@ std::wstring StartIpc(const std::wstring& pipeName) {
 
 void StopIpc() {
     g_stop = true;
+    g_connected = false;
     if (g_pipe != INVALID_HANDLE_VALUE) {
         DisconnectNamedPipe(g_pipe);
         CloseHandle(g_pipe);

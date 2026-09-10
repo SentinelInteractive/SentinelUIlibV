@@ -43,8 +43,9 @@ take the game down.**
   (helper process → shared memory → ASI Present hook). F9 show/hide works.
 - ⏳ **P1 stability matrix** (resolution/borderless, Steam overlay, RAGENativeUI, LSPDFR cycles,
   20× restarts) — issue #4.
-- ⏳ **P2**: input capture (F10), JS→C# bridge over IPC, multi-layer API, `sentinelui://` content
-  scheme — issues #1, #2.
+- ✅ **P2**: input capture + JS↔C# bridge **verified in-game** (issue #1). Layer stack +
+  `sentinelui://` scheme **verified in-game** (issue #2, 2026-09-10 sessions: two layers,
+  z-order, click-through routing, F9/F11 toggles, per-layer viewport) — see `docs/GATE-P2.md`.
 - ⏳ **P3**: full managed API + RPH/LSPDFR samples + NuGet + version handshake — issue #3.
 - ⏳ **P4**: web component toolkit (`sui-*`, theme, gallery) — issue #5.
 - ⏳ **P5**: hardening & release (perf gates, crash capture, coexistence, packaging) — issue #6.
