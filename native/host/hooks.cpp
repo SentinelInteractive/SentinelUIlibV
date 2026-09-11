@@ -101,9 +101,9 @@ void SyncViewport() {
                  g_renderer.height(), epoch);
 }
 
-void ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
-    if (wParam != VK_F9 && wParam != VK_F10 && wParam != VK_F11) return;
-    if (lParam & 0x40000000) return;  // auto-repeat
+bool ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
+    if (wParam != VK_F9 && wParam != VK_F10 && wParam != VK_F11) return false;
+    if (lParam & 0x40000000) return true;  // auto-repeat: swallow, do not re-toggle
     if (wParam == VK_F9) {
         g_visible = !g_visible;
         SUI_LOG_INFO("F9: visibility -> %s", g_visible ? "visible" : "hidden");
@@ -117,6 +117,7 @@ void ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
     } else {
         ToggleDemoLayer();  // F11: demo HUD layer (issue #2 acceptance)
     }
+    return true;   // hotkeys are ours: never forward them to the page or the game
 }
 
 // Client-area mouse coords from lParam (signed shorts).
@@ -208,8 +209,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {
-            // Toggle hotkeys ONLY on keydown (keyup must not re-toggle).
-            ToggleHotkeys(wParam, lParam);
+            // Toggle hotkeys ONLY on keydown (keyup must not re-toggle), and never
+            // forward them to the page or the game.
+            if (ToggleHotkeys(wParam, lParam)) return 0;
             if (g_capture) {
                 // Keyboard goes to the focused layer (else topmost interactive).
                 int id = g_layers.KeyTarget();
@@ -227,6 +229,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_KEYUP:
         case WM_SYSKEYUP:
+            if (wParam == VK_F9 || wParam == VK_F10 || wParam == VK_F11) return 0;  // our hotkeys
             if (g_capture) {
                 g_keysDown.erase((UINT)wParam);
                 int id = g_layers.KeyTarget();

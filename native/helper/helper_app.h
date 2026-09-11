@@ -40,6 +40,9 @@ namespace sui_helper {
 
 // Software cursor injected into pages (defined in helper_app.cpp).
 extern const char* kCursorJs;
+// Capture badge state toggles (defined in helper_app.cpp).
+extern const char* kCaptureStateJsOn;
+extern const char* kCaptureStateJsOff;
 
 struct HelperConfig {
     std::wstring moduleDir;      // exe directory
@@ -159,6 +162,7 @@ public:
     void ExecuteJs(const std::string& javascript);
     void SetVisible(bool visible);
     void SetMasterVisible(bool visible);
+    void SetCaptureIndicator(bool on);
     void SetFocused(bool keyboard, bool mouse);
     void SetViewport(int width, int height);
     void DispatchKey(bool down, int vk, int scancode, bool extended);
@@ -190,6 +194,7 @@ private:
     int viewHeight_ = 720;
     bool visible_ = true;         // per-layer visibility (SuiSetLayerVisible)
     bool masterVisible_ = true;   // F9 master pause/resume
+    bool captureOn_ = false;      // input capture badge state (queued to pages)
     bool ignoreLog_ = false;      // one-shot "paint ignored while hidden" log
     std::atomic<bool> jsReady_{false};   // set on load commit (or error page)
     std::mutex jsMutex_;
@@ -259,6 +264,7 @@ public:
     void CloseLayer(int layerId);
     void SetVisible(int layerId, bool visible);
     void SetMasterVisible(bool visible);   // F9: pause/resume every page
+    void SetCaptureIndicator(bool on);     // input-capture badge on every page
     void SetFocus(int layerId, bool keyboard, bool mouse);
     void ExecuteJs(int layerId, const std::string& js);
     void Navigate(int layerId, const std::string& urlUtf8);
@@ -289,6 +295,7 @@ private:
     int lastViewportW_ = 0;   // last game viewport (UI thread); new layers adopt it
     int lastViewportH_ = 0;
     bool masterVisible_ = true;   // F9 state (UI thread); adopted by new layers
+    bool captureOn_ = false;      // capture badge state; adopted by new layers
     std::mutex opsMutex_;
     std::vector<std::function<void()>> ops_;  // queued layer ops
     std::map<int, CefRefPtr<LayerClient>> layers_;  // UI thread

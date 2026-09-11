@@ -73,6 +73,7 @@ void LayerClient::OnLoadingStateChange(CefRefPtr<CefBrowser>, bool isLoading, bo
         retryPending_ = false;
         // Inject the software cursor once the page finished loading.
         QueueJs(kCursorJs);
+        QueueJs(captureOn_ ? kCaptureStateJsOn : kCaptureStateJsOff);
     }
 }
 
@@ -117,6 +118,14 @@ void LayerClient::SetMasterVisible(bool visible) {
     ApplyVisibility();
 }
 
+void LayerClient::SetCaptureIndicator(bool on) {
+    captureOn_ = on;
+    // Only queue the state when the page already has the injected script. Before
+    // load commit, OnLoadingStateChange queues kCursorJs + the current state in
+    // the right order itself.
+    if (jsReady_) QueueJs(on ? kCaptureStateJsOn : kCaptureStateJsOff);
+}
+
 void LayerClient::ApplyVisibility() {
     if (!browser_) return;
     bool effective = visible_ && masterVisible_;
@@ -159,23 +168,51 @@ void LayerClient::ExecuteJs(const std::string& javascript) {
 }
 
 // Software cursor: GTA V hides the OS cursor and OSR draws none — the page renders
-// its own click-through arrow so users can see where they're pointing.
+// its own arrow. It is only visible while input capture is on (window.__suiSetCapture),
+// uses a plain white/black arrow with a drop shadow instead of the old
+// mix-blend-mode:difference (which inverted whatever was under it), moves via
+// translate3d for smoothness and scales slightly on press. The same injected script
+// carries the input-capture badge. Deliberately no CSS `cursor:` property: OSR does
+// not draw one.
 const char* kCursorJs =
     "(function(){"
-    "if(document.getElementById('sui-cursor'))return;"
+    "if(!document.getElementById('sui-cursor')){"
     "var c=document.createElement('div');"
     "c.id='sui-cursor';"
-    "c.style.cssText='position:fixed;left:0;top:0;width:20px;height:20px;"
-    "pointer-events:none;z-index:2147483647;mix-blend-mode:difference;';"
-    "c.innerHTML='<svg width=\"20\" height=\"20\" viewBox=\"0 0 20 20\">"
-    "<path d=\"M2 2 L10 14 L12 12 L16 18 L18 16 L14 10 L16 8 Z\" "
-    "fill=\"rgba(255,255,255,.95)\" stroke=\"rgba(0,0,0,.85)\" stroke-width=\"1.5\"/></svg>';"
+    "c.style.cssText='position:fixed;left:0;top:0;width:22px;height:22px;pointer-events:none;"
+    "z-index:2147483647;display:none;transform:translate3d(-100px,-100px,0);"
+    "will-change:transform;transform-origin:1px 1px;"
+    "filter:drop-shadow(0 1.5px 2px rgba(0,0,0,.55));';"
+    "c.innerHTML='<svg width=\"22\" height=\"22\" viewBox=\"0 0 22 22\">"
+    "<path d=\"M1 1 L1 17.6 L5.6 13.4 L8.5 20 L11.5 18.6 L8.6 12.1 L14.6 11.7 Z\" "
+    "fill=\"#ffffff\" stroke=\"#141414\" stroke-width=\"1.5\" "
+    "stroke-linejoin=\"round\" stroke-linecap=\"round\"/></svg>';"
     "document.body.appendChild(c);"
-    "var move=function(e){c.style.left=e.clientX+'px';c.style.top=e.clientY+'px';};"
-    "document.addEventListener('mousemove',move,true);"
-    "document.addEventListener('mousedown',function(){c.style.transform='translate(-2px,-1px) scale(.9)';},true);"
-    "document.addEventListener('mouseup',function(){c.style.transform='translate(-2px,-2px)';},true);"
+    "var x=-100,y=-100,pressed=false;"
+    "var apply=function(){c.style.transform='translate3d('+x+'px,'+y+'px,0)'+(pressed?' scale(.86)':'');};"
+    "document.addEventListener('mousemove',function(e){x=e.clientX;y=e.clientY;apply();},true);"
+    "document.addEventListener('mousedown',function(){pressed=true;apply();},true);"
+    "document.addEventListener('mouseup',function(){pressed=false;apply();},true);"
+    "}"
+    "if(!document.getElementById('sui-capture')){"
+    "var b=document.createElement('div');"
+    "b.id='sui-capture';"
+    "b.style.cssText='position:fixed;right:12px;top:10px;padding:4px 10px;border-radius:4px;"
+    "background:rgba(217,37,52,.88);color:#fff;font:600 11px/1.6 Consolas,monospace;"
+    "letter-spacing:.08em;pointer-events:none;z-index:2147483647;display:none;';"
+    "b.textContent='INPUT CAPTURE \\u2022 F10 RELEASE';"
+    "document.body.appendChild(b);"
+    "}"
+    "window.__suiSetCapture=function(on){"
+    "var c=document.getElementById('sui-cursor');if(c)c.style.display=on?'block':'none';"
+    "var b=document.getElementById('sui-capture');if(b)b.style.display=on?'block':'none';"
+    "};"
     "})();";
+
+const char* kCaptureStateJsOn =
+    "window.__suiSetCapture&&window.__suiSetCapture(true);";
+const char* kCaptureStateJsOff =
+    "window.__suiSetCapture&&window.__suiSetCapture(false);";
 
 void LayerClient::QueueJs(const std::string& javascript) {
     std::lock_guard<std::mutex> lock(jsMutex_);
@@ -283,6 +320,7 @@ bool LayerManager::CreateLayerNow(int layerId, const std::string& urlUtf8) {
     // OnAfterCreated stored the browser; keep the client referenced in the map.
     layers_[layerId] = client;
     client->SetMasterVisible(masterVisible_);
+    client->SetCaptureIndicator(captureOn_);
     if (focusedId_ == 0) focusedId_ = layerId;
     SUI_LOG_INFO("layer %d browser created: %s", layerId, urlUtf8.c_str());
     return true;
@@ -412,6 +450,14 @@ void LayerManager::DispatchMouseWheel(int layerId, int delta, int x, int y) {
     });
 }
 
+void LayerManager::SetCaptureIndicator(bool on) {
+    captureOn_ = on;
+    std::lock_guard<std::mutex> lock(opsMutex_);
+    ops_.push_back([this, on]() {
+        for (auto& kv : layers_) kv.second->SetCaptureIndicator(on);
+    });
+}
+
 void LayerManager::PumpOps() {
     std::vector<std::function<void()>> batch;
     {
@@ -494,6 +540,12 @@ void OnIpcCommand(const std::string& line) {
     size_t pos = 1;
     switch (line[0]) {
         case 'C': {  // C<id> <len>:<url> — create a layer browser
+            // Bare "C1"/"C0" is the input-capture badge toggle (SetCaptureState);
+            // the create form always has a space after the id.
+            if (line.size() == 2 && (line[1] == '0' || line[1] == '1')) {
+                LM().SetCaptureIndicator(line[1] == '1');
+                break;
+            }
             std::string url;
             if (ParseIdThenBody(line, 1, id, pos) && ParseLenBody(line, pos, url))
                 LM().CreateLayer(id, url);

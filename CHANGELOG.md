@@ -4,6 +4,21 @@ All notable changes. Format loosely follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Changed — 2026-09-11 (input polish: cursor, capture badge, hotkeys)
+- **Software cursor rebuilt** — a white/black arrow with a drop shadow instead of the old
+  `mix-blend-mode: difference` shape (which inverted whatever was under it), moved via
+  `translate3d`, presses scale the tip. It is now **only visible while input capture is on**:
+  previously it froze on screen at the last mouse position after capture dropped (alt-tab),
+  which made the UI look glitched.
+- **Capture badge** — the same injected script draws a small top-right
+  "INPUT CAPTURE • F10 RELEASE" badge while capture is active, so it is obvious when clicks
+  will reach the page.
+- **Capture state now actually reaches the helper** — bare `C1`/`C0` from `SetCaptureState`
+  was silently ignored because `C` is also the create-layer command; the helper parses the
+  bare two-byte form as the capture toggle (badge + cursor visibility).
+- **F9/F10/F11 are swallowed** on keydown *and* keyup and never forwarded to pages or the game
+  (previously pressing F10 while capturing also sent F10 into the page).
+
 ### Fixed — 2026-09-11 (mouse clicks were inverted; capture-loss button release)
 - **CEF `SendMouseClickEvent`'s third parameter is `mouseUp`, not `mouseDown`.** The helper
   passed the ASI's `down` flag straight through, so every click sent up-before-down; Chromium
