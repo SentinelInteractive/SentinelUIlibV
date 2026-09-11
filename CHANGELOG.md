@@ -4,6 +4,17 @@ All notable changes. Format loosely follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Fixed — 2026-09-11 (panel blink after GTA swapchain re-creation)
+- **Layers could stay invisible after GTA recreated its swapchain** (alt-tab, fullscreen /
+  display transitions, some menus): resource init re-created the layer textures empty, but the
+  compositor only uploaded layers that published a *new* frame — a static page could stay blank
+  until its next repaint (the P2 panel "randomly disappearing then coming back"). Resource
+  (re)init now forces a re-upload of every layer's resident frame in the same Present, so the
+  stack reappears immediately. New `swapchain changed` / `compositing paused|resumed` log lines
+  make field diagnosis possible.
+- Sample callout probability High → Low (it spawned constantly during testing; `ForceCallout`
+  still works on demand).
+
 ### Changed — 2026-09-11 (input polish: cursor, capture badge, hotkeys)
 - **Software cursor rebuilt** — a white/black arrow with a drop shadow instead of the old
   `mix-blend-mode: difference` shape (which inverted whatever was under it), moved via

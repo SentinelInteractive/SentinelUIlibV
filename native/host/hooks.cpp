@@ -309,18 +309,38 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
     // Lazy resource init + viewport sync from the very first Present, regardless
     // of frame availability (input scaling must exist even before first paint).
     static uint64_t s_nextEnsureAttempt = 0;
+    static bool s_compositePausedLogged = false;
+    static bool s_wasComposited = false;   // declared above the init block: re-init clears it
     const bool newSwapChain = (g_swapChain != swapChain);
     if (newSwapChain || !g_renderer.ready()) {
         const uint64_t now = GetTickCount64();
         if (newSwapChain || now >= s_nextEnsureAttempt) {
+            if (newSwapChain) {
+                SUI_LOG_INFO("swapchain changed (%p -> %p); re-initializing resources.",
+                             (void*)g_swapChain, (void*)swapChain);
+            }
             g_swapChain = swapChain;
             if (g_renderer.EnsureResources(swapChain)) {
                 g_viewportSent = false;
                 s_nextEnsureAttempt = 0;
+                // Textures were (re)created empty: force-upload every layer's
+                // resident frame on this Present, otherwise a layer stays
+                // invisible until its page happens to repaint (observed as the
+                // P2 panel "randomly disappearing then coming back" after GTA
+                // recreated the swapchain).
+                s_wasComposited = false;
+                if (s_compositePausedLogged) {
+                    SUI_LOG_INFO("renderer recovered; compositing resumes.");
+                    s_compositePausedLogged = false;
+                }
             } else {
                 // Device lost / mid-recreate: retry at most once a second so a
                 // dead device cannot churn or spam the log every frame.
                 s_nextEnsureAttempt = now + 1000;
+                if (!s_compositePausedLogged) {
+                    SUI_LOG_WARN("renderer not ready (device lost/re-init?); compositing paused.");
+                    s_compositePausedLogged = true;
+                }
             }
         }
     }
@@ -328,7 +348,6 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
 
     // First composited frame after any hidden period force-uploads every
     // layer's resident frame so the whole stack lands in the same Present.
-    static bool s_wasComposited = false;
     if (g_framesReady && g_visible && g_renderer.ready()) {
         if (g_frameBuf.empty()) g_frameBuf.resize(4096 * 2160 * 4u);
         bool force = !s_wasComposited;
