@@ -241,10 +241,9 @@ namespace SentinelUI
                                 "Bootstrap domain receives events; plugin AppDomains get none. Update the runtime.");
                 }
 
-                // Per-domain lifetime: if this AppDomain (plugin) goes away while the host keeps
-                // running, make sure we don't hold anything that would let the host call back into it.
-                AppDomain.CurrentDomain.DomainUnload += OnDomainUnload;
-                AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
+                // NOTE: domain lifetime is owned by Sui, not here. A client AppDomain's
+                // DomainUnload must only release its event queue — never SuiShutdown.
+                // (2026-09-11: wiring Shutdown here made a probe client domain kill the host.)
 
                 SuiLog.Info($"Native host ready (API v{_apiVersion}; {(_ownsModule ? "loaded" : "attached")}).");
                 return true;
@@ -410,7 +409,7 @@ namespace SentinelUI
             }
         }
 
-        private static void OnDomainUnload(object sender, EventArgs e) => Shutdown();
-        private static void OnProcessExit(object sender, EventArgs e) => Shutdown();
+        // Domain lifetime handlers live in Sui (owner vs client); removing the copies
+        // here ensures a client AppDomain can never stop the host.
     }
 }

@@ -275,7 +275,12 @@ namespace SentinelUI.HostProbe
                 var layer = Sui.CreateLayer("sentinelui://probe/issue1.html");
                 Check(layer != null, "layer created");
                 var events = new System.Collections.Generic.List<string>();
-                Action<SuiMessage> handler = m => { lock (events) events.Add(m.Type + "|" + m.PayloadJson); };
+                Action<SuiMessage> handler = m =>
+                {
+                    // Only events routed to THIS layer (other AppDomains' layers broadcast globally).
+                    if (m.Layer != layer) return;
+                    lock (events) events.Add(m.Type + "|" + m.PayloadJson);
+                };
                 Sui.MessageReceived += handler;
                 try
                 {

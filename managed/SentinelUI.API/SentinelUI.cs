@@ -321,7 +321,6 @@ namespace SentinelUI
 
         private static void OnOwnerDomainUnload(object sender, EventArgs e) => Shutdown();
         private static void OnOwnerProcessExit(object sender, EventArgs e) => Shutdown();
-
         /// <summary>Client AppDomain teardown: close the layers it owns and release its
         /// event queue. Never touches the host lifecycle (Bootstrap owns that).</summary>
         private static void OnClientDomainUnload(object sender, EventArgs e)
@@ -419,7 +418,11 @@ namespace SentinelUI
             Sui.RemoveLayer(this);
         }
 
-        internal void RaiseMessage(SuiMessage message) => Message?.Invoke(message);
+        internal void RaiseMessage(SuiMessage message)
+        {
+            message.Layer = this;
+            Message?.Invoke(message);
+        }
     }
 
     /// <summary>A message received from a page (or sent to it via <see cref="SuiLayer.Send"/>).</summary>
