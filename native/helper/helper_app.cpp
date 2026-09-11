@@ -237,7 +237,10 @@ void LayerClient::DispatchMouseButton(int button, bool down, int x, int y) {
     CefBrowserHost::MouseButtonType type = MBT_LEFT;
     if (button == 1) type = MBT_MIDDLE;
     if (button == 2) type = MBT_RIGHT;
-    browser_->GetHost()->SendMouseClickEvent(ev, type, down, 1);
+    // CEF's third parameter is |mouseUp|, NOT mouseDown. Passing the raw down flag
+    // inverted every click (up before down), so Chromium only completed a button
+    // press on every second click — the "buttons are buggy" field report 2026-09-11.
+    browser_->GetHost()->SendMouseClickEvent(ev, type, /*mouseUp=*/!down, 1);
 }
 
 void LayerClient::DispatchMouseWheel(int delta, int x, int y) {

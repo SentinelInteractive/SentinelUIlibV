@@ -4,6 +4,15 @@ All notable changes. Format loosely follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Fixed — 2026-09-11 (mouse clicks were inverted; capture-loss button release)
+- **CEF `SendMouseClickEvent`'s third parameter is `mouseUp`, not `mouseDown`.** The helper
+  passed the ASI's `down` flag straight through, so every click sent up-before-down; Chromium
+  then completed a button press only on every second click (field report: "buttons are buggy,
+  sometimes they work"). Fixed: pass `!down` (`helper_app.cpp`).
+- **Synthesized button-ups on capture end** (F10 off, alt-tab/focus loss): the ASI tracks
+  forwarded mouse buttons and releases any still-held ones, so CEF cannot stay stuck in a
+  pressed state that swallows later clicks (`hooks.cpp`).
+
 ### Added — 2026-09-11 (issue #3: API 0.3 — cross-domain clients, inline HTML, handshake)
 - **Per-AppDomain event queues (host export table v4)** — `SuiRegisterEventClient` /
   `SuiUnregisterEventClient` / `SuiPumpEventClient`: every inbound event is copied to each

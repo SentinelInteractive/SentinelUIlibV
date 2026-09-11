@@ -94,6 +94,10 @@ Hard-won knowledge from building SentinelUI (2026-09-08). Every item below was
   software OSR path.
 - A static page paints once or twice then **goes fully idle** — the hidden/static overlay cost is
   genuinely ~zero. (Verified: 2–3 paints in 45 s on a static page.)
+- **`SendMouseClickEvent`'s third parameter is `mouseUp` (not mouseDown).** Passing a down flag
+  through directly inverts every click (CEF sees up-before-down); buttons then fire only on every
+  second click. Symptom: "buttons are buggy, sometimes they work". Fixed 2026-09-11. Also
+  synthesize button-ups when capture ends (focus loss/F10) — a stuck held button blocks later clicks.
 - CEF's own logs (`debug.log`/`chrome_debug.log`) and console dispatch tell you a lot — enable
   them while diagnosing, disable in release.
 

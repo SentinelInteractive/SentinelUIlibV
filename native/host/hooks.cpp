@@ -44,6 +44,12 @@ bool g_hooked = false;
 // Game-thread only: WndProc and capture transitions both run on the game thread.
 std::map<UINT, std::pair<UINT, bool>> g_keysDown;
 
+// Buttons currently forwarded while captured (0=left, 1=middle, 2=right; game thread
+// only). A release that never reaches the page (focus loss/alt-tab/capture toggle
+// while holding) would leave CEF believing the button is still down, blocking or
+// mis-firing subsequent clicks — capture transitions synthesize ups for these.
+bool g_mouseDown[3] = {false, false, false};
+
 // Focus loss must not leave the page thinking a key is still held, and must not
 // leave the game with its controls disabled. Synthesize key-ups, then release.
 void ReleaseCapturedKeys() {
@@ -159,6 +165,24 @@ void StopMousePolling() {
     }
 }
 
+// Synthesize button-ups for anything still held when capture ends (F10 toggle,
+// alt-tab/focus loss, shutdown). Without this CEF keeps the button state and the
+// page stops reacting to clicks until a matching up arrives.
+void ReleaseCapturedMouseButtons() {
+    if (!g_mouseDown[0] && !g_mouseDown[1] && !g_mouseDown[2]) return;
+    int id = g_layers.MouseTarget();
+    int x = g_lastCursorX.load();
+    int y = g_lastCursorY.load();
+    for (int b = 0; b < 3; ++b) {
+        if (!g_mouseDown[b]) continue;
+        g_mouseDown[b] = false;
+        if (id) {
+            SendCommand("B" + std::to_string(id) + " " + std::to_string(b) + " 0 " +
+                        std::to_string(x) + " " + std::to_string(y) + "\n");
+        }
+    }
+}
+
 void InternalOnCaptureChanged(bool on) {
     if (!g_gameWindow) return;
     if (on) {
@@ -173,6 +197,7 @@ void InternalOnCaptureChanged(bool on) {
         }
         StartMousePolling();
     } else {
+        ReleaseCapturedMouseButtons();
         StopMousePolling();
         ClipCursor(nullptr);
         ShowCursor(FALSE);
@@ -256,6 +281,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 SendCommand("B" + std::to_string(id) + " " + std::to_string(button) + " " +
                             (down ? "1" : "0") + " " + std::to_string(Cx(lParam)) + " " +
                             std::to_string(Cy(lParam)) + "\n");
+                g_mouseDown[button] = down;
                 return 0;
             }
             break;
