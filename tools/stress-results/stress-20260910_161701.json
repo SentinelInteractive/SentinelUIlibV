@@ -1,0 +1,23 @@
+{
+  "Index": 1,
+  "StartedAt": "2026-09-10T16:17:01",
+  "QuitMode": "Kill",
+  "ReadySeconds": null,
+  "CleanExit": false,
+  "Forced": false,
+  "Orphans": 0,
+  "DumpsAdded": 0,
+  "GtaRssStartMB": null,
+  "GtaRssEndMB": null,
+  "HelperRssEndMB": null,
+  "CefRssEndMB": null,
+  "RssGrowthMB": null,
+  "ErrorsInLog": 0,
+  "DeviceLost": 0,
+  "KilledFocus": 0,
+  "CaptureToggles": 0,
+  "RphBootstrapOk": false,
+  "RphUnloadOk": false,
+  "Pass": false,
+  "Notes": "FAILED: GTA5.exe did not start within 300s."
+}

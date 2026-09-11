@@ -670,11 +670,13 @@ int RunBrowserProcess(const HelperConfig& cfg) {
         lm.PumpOps();
         lm.FlushJsQueues();
         lm.Tick();
-        // Orphan guard: if the game (ASI) is gone the pipe drops and never comes
-        // back — exit after 30s instead of lingering as a zombie CEF process
-        // tree that locks the game folder.
+        // Orphan guard: the parent-pid watchdog exits immediately when the game
+        // process dies (kill/crash); the pipe-down timer stays as a fallback for
+        // hosts that spawned us without --parent-pid.
         if (!cfg.selftest) {
-            if (IpcConnected()) {
+            if (cfg.parentPid && ParentProcessGone()) {
+                quitting = true;
+            } else if (IpcConnected()) {
                 ipcDownSince = 0;
             } else {
                 if (!ipcDownSince) ipcDownSince = GetTickCount64();

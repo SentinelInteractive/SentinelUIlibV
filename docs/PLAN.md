@@ -1,7 +1,8 @@
 # SentinelUI — Authoritative Plan
 
-Status: **Phase 0 in progress**. Source of truth for architecture decisions, gates and acceptance.
-Last updated: 2026-09-08 (after external design critique — all 25 critiques addressed; see §7).
+Status: **P1 core + P2 verified in-game (2026-09-10)**; load-path constraint recorded 2026-09-11
+(see decision 2). Source of truth for architecture decisions, gates and acceptance.
+Last updated: 2026-09-11.
 
 ---
 
@@ -29,13 +30,18 @@ MANAGED API     SentinelUI.API.dll (net472 x64, no SHVDN). Static facade, DllImp
                 (or LoadLibrary by absolute path). Events delivered ONLY on the thread calling Pump()
                 (game thread by contract => handlers may call natives). Per-domain registration tokens,
                 AppDomain.DomainUnload auto-unregister, epoch/tombstone guards, strong delegate refs.
-BOOTSTRAP       SentinelUI.Bootstrap.dll (RPH plugin, <game>\Plugins\). Sole host loader: GetModuleHandle
-                guard, then LoadLibrary(<game>\SentinelUI\SentinelUI.asi). Per-frame pump fiber.
+BOOTSTRAP       SentinelUI.Bootstrap.dll (RPH plugin, <game>\Plugins\). Attach-only host owner:
+                GetModuleHandle("SentinelUI.asi") — NEVER LoadLibrary in-game (RPH's hook guard
+                reverts Present hooks installed after its own; the ASI loader must load the root
+                ASI at process start). Per-frame pump fiber.
                 Console commands (sui ...). Graceful shutdown on unload - NEVER in PROCESS_DETACH.
 ```
 
-- **Single canonical load path**: Bootstrap only. Host file lives in `<game>\SentinelUI\` (a folder ASI
-  loaders never scan) => no double-load, deterministic hook order.
+- **Canonical load path**: ScriptHookV (ASI loader) loads `<game>\SentinelUI.asi` from the game root
+  at process start => Present hook precedes RPH's guard; Bootstrap attaches to that module and owns
+  lifecycle. A single-instance mutex makes a stray second module copy inert (API reports -1).
+  Without an ASI loader the host never loads: Bootstrap logs it and the UI is a no-op (no crash).
+  Field evidence for the constraint: `docs/LESSONS-LEARNED.md` §2 (2026-09-11).
 - **Cross-domain**: no managed singletons across AppDomains (LSPDFR plugins vs Bootstrap). Only the native
   host state is shared (same pattern as RAGENativeUI's rnui_shared_state mmf).
 - **Stacking guarantee** (tested): HTML above game HUD/pause menu; below RPH-drawn graphics content.
@@ -44,7 +50,9 @@ BOOTSTRAP       SentinelUI.Bootstrap.dll (RPH plugin, <game>\Plugins\). Sole hos
 ## 3. Key decisions (post-critique)
 
 1. Host: C++20, CEF pinned at Phase-0 gate result (LTS 144 first candidate), own thin D3D11 hook.
-2. Load: RPH Bootstrap only; host in `<game>\SentinelUI\SentinelUI.asi`; GetModuleHandle guard.
+2. Load: ASI loader (ScriptHookV) loads root `SentinelUI.asi` at process start; Bootstrap attaches
+   (`GetModuleHandle`, never `LoadLibrary`) and owns lifecycle. Single-instance mutex. See §2 and
+   the 2026-09-11 field note (RPH hook guard reverts late Present hooks).
 3. Render: transparent OSR, dirty-rect partial uploads, per-layer FPS caps, redraw-on-invalidate,
    WasHidden + timer throttle for hidden layers. sRGB/gamma-correct quad shader.
 4. Input: WndProc forwarding; capture-owning GameFiber (DISABLE_CONTROL_ACTION set) while a

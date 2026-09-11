@@ -7,13 +7,13 @@ namespace SentinelUI
     /// <summary>
     /// Low-level bridge to the native CEF host module (SentinelUI.asi).
     ///
-    /// IMPORTANT (architecture decision D2/DC1): the ONLY supported way to load the host is the
-    /// RPH Bootstrap plugin calling <see cref="NativeHost.Initialize"/> with the absolute path to
-    /// &lt;game&gt;\SentinelUI\SentinelUI.asi. The module intentionally lives in a folder that ASI
-    /// loaders never scan, so there is exactly one load path, one hook order and one init thread.
-    ///
-    /// LoadLibrary-by-path is used instead of static DllImport so we control resolution and can
-    /// degrade gracefully (log + null object) when the runtime is not installed.
+    /// LOAD CONTRACT (2026-09-11): the ASI is loaded at process start by the ASI loader
+    /// (ScriptHookV loads root *.asi) — it MUST precede RPH's Present hook; RPH's hook
+    /// guard reverts foreign Present hooks installed later (instant crash, see
+    /// docs/LESSONS-LEARNED.md §2). In-game the Bootstrap plugin calls
+    /// Initialize(..., allowLoad:false) and this class only ATTACHES to the already-loaded
+    /// module (GetModuleHandle). LoadLibrary-by-path remains for offline probes/tests
+    /// (allowLoad default) and degrades gracefully when the host is absent.
     /// </summary>
     internal static class NativeHost
     {
@@ -45,6 +45,9 @@ namespace SentinelUI
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr LoadLibraryW(string lpFileName);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr GetModuleHandleW(string lpModuleName);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
@@ -117,6 +120,7 @@ namespace SentinelUI
         private static SuiRegisterRootDelegate _registerContentRoot;
 
         private static IntPtr _module;
+        private static bool _ownsModule;   // true only when WE LoadLibrary'd it (probe/tests)
         private static int _apiVersion;
         private static SuiGetApiVersionDelegate _getApiVersion;
         private static SuiPumpEventsDelegate _pumpEvents;
@@ -127,21 +131,44 @@ namespace SentinelUI
         public static int ApiVersion => _apiVersion;
         public static IntPtr ModuleHandle => _module;
 
-        public static bool Initialize(string hostPath)
+        public static bool Initialize(string hostPath, bool allowLoad = true)
         {
-            if (_module != IntPtr.Zero) return true; // already loaded (GetModuleHandle guard lives here)
-            if (string.IsNullOrWhiteSpace(hostPath) || !File.Exists(hostPath))
-            {
-                SuiLog.Warn($"Host module not found at '{hostPath}'. SentinelUI unavailable (graceful degradation).");
-                return false;
-            }
+            if (_module != IntPtr.Zero) return true; // already attached
 
             try
             {
-                _module = LoadLibraryW(Path.GetFullPath(hostPath));
-                if (_module == IntPtr.Zero)
+                // Attach-first: in-game the ASI loader (ScriptHookV) owns the module and
+                // loaded it at process start, before RPH armed its Present-hook guard.
+                // Never LoadLibrary it from here — a hook installed after RPH's guard
+                // gets reverted and crashes the D3D chain (2026-09-11, LESSONS §2).
+                _module = GetModuleHandleW("SentinelUI.asi");
+                if (_module != IntPtr.Zero)
                 {
-                    SuiLog.Error($"LoadLibrary failed for '{hostPath}' (Win32 error {Marshal.GetLastWin32Error()}).");
+                    _ownsModule = false;
+                    SuiLog.Info("Attached to the ASI-loader-hosted SentinelUI.asi (no LoadLibrary).");
+                }
+                else if (allowLoad)
+                {
+                    // Offline probes/tests only (host not loaded by an ASI loader).
+                    if (string.IsNullOrWhiteSpace(hostPath) || !File.Exists(hostPath))
+                    {
+                        SuiLog.Warn($"Host module not found at '{hostPath}'. SentinelUI unavailable (graceful degradation).");
+                        return false;
+                    }
+                    _module = LoadLibraryW(Path.GetFullPath(hostPath));
+                    if (_module == IntPtr.Zero)
+                    {
+                        SuiLog.Error($"LoadLibrary failed for '{hostPath}' (Win32 error {Marshal.GetLastWin32Error()}).");
+                        return false;
+                    }
+                    _ownsModule = true;
+                }
+                else
+                {
+                    SuiLog.Error("SentinelUI host is not loaded in this process. The ASI loader " +
+                                 "(ScriptHookV) must load the root SentinelUI.asi at startup; Bootstrap " +
+                                 "attaches to it but never LoadLibrary's it (RPH Present-hook guard). " +
+                                 "UI features are disabled for this session.");
                     return false;
                 }
 
@@ -149,8 +176,7 @@ namespace SentinelUI
                 if (_getApiVersion == null)
                 {
                     SuiLog.Error("Host module is missing SuiGetApiVersion export — version mismatch?");
-                    FreeLibrary(_module);
-                    _module = IntPtr.Zero;
+                    Detach();
                     return false;
                 }
 
@@ -182,8 +208,7 @@ namespace SentinelUI
                 if (_apiVersion < 1)
                 {
                     SuiLog.Error($"Host API version {_apiVersion} is not supported by this API assembly.");
-                    FreeLibrary(_module);
-                    _module = IntPtr.Zero;
+                    Detach();
                     return false;
                 }
 
@@ -192,7 +217,7 @@ namespace SentinelUI
                 AppDomain.CurrentDomain.DomainUnload += OnDomainUnload;
                 AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
 
-                SuiLog.Info($"Native host initialized: '{hostPath}' (API v{_apiVersion}).");
+                SuiLog.Info($"Native host ready (API v{_apiVersion}; {(_ownsModule ? "loaded" : "attached")}).");
                 return true;
             }
             catch (Exception ex)
@@ -200,6 +225,17 @@ namespace SentinelUI
                 SuiLog.Error("NativeHost.Initialize failed: " + ex);
                 return false;
             }
+        }
+
+        /// <summary>Releases the module reference. Never FreeLibrary's a module the
+        /// ASI loader owns (decrementing a refcount we never incremented would unload
+        /// the host under the game process).</summary>
+        private static void Detach()
+        {
+            if (_module == IntPtr.Zero) return;
+            if (_ownsModule) FreeLibrary(_module);
+            _module = IntPtr.Zero;
+            _ownsModule = false;
         }
 
         private static T LoadExport<T>(string name) where T : Delegate
@@ -288,11 +324,7 @@ namespace SentinelUI
             }
             finally
             {
-                if (_module != IntPtr.Zero)
-                {
-                    FreeLibrary(_module);
-                    _module = IntPtr.Zero;
-                }
+                Detach();
             }
         }
 

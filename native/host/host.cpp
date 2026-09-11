@@ -13,8 +13,18 @@
 // plugins add layers with SuiCreateLayer (ids >= 2). Every layer owns a frame
 // mapping; the Present hook composites the visible stack in z order and the
 // WndProc hook routes captured input to the focused/topmost interactive layer.
+//
+// Load path (critical): ScriptHookV loads this ASI from the GAME ROOT at
+// process start, BEFORE RPH installs its Present hook. Bootstrap attaches to
+// the already-loaded module. Loading it later (e.g. cold-load from the
+// subfolder at RPH plugin-load time) makes RPH's hook guard detect a foreign
+// hook on Present, revert the function and crash the D3D chain — observed
+// 2026-09-11 (RPH log "Hook on our Present hook detected / Restoring
+// untouched D3D11Present"; AV in dxgi!Present). Do not move this file into a
+// subfolder unless the Present hook is replaced by an RPH-native render path.
 
 #include "exports.h"
+#include "crash.h"
 #include "framesrc.h"
 #include "hooks.h"
 #include "ipc.h"
@@ -50,6 +60,7 @@ LayerTable g_layers;
 bool g_visible = true;           // master overlay toggle (F9)
 bool g_framesReady = false;
 bool g_shutdownRequested = false;
+bool g_duplicateInstance = false;  // second module copy in the same process (inert)
 bool g_capture = false;          // input capture (F10 / SuiSetCapture)
 HostPaths g_paths;
 HMODULE g_hinst = nullptr;
@@ -142,7 +153,10 @@ void StartHelper() {
         L" --size=1280x720" +
         L" --shm=" + Quote(g_paths.shmName) +
         L" --logs=" + Quote(g_paths.logDir) +
-        L" --cache=" + Quote(g_paths.cacheDir);
+        L" --cache=" + Quote(g_paths.cacheDir) +
+        // Fast orphan cleanup: the helper waits on this pid and exits immediately
+        // when the game process dies (kill/crash), instead of the 30s pipe guard.
+        L" --parent-pid=" + std::to_wstring(GetCurrentProcessId());
 
     STARTUPINFOW si = {};
     si.cb = sizeof(si);
@@ -218,8 +232,17 @@ HWND FindGameWindow() {
 
 DWORD WINAPI BootThread(LPVOID) {
     Log::Initialize(g_paths.logDir);
+    InstallCrashHandler(g_paths.logDir, L"sentinelui_host");
     TraceF("boot: log-init done");
     SUI_LOG_INFO("SentinelUI host loading (module dir: %ls).", g_paths.moduleDir.c_str());
+
+    // Test-only: raise a synthetic exception right after the crash handler is
+    // installed so minidump capture can be verified without a real crash.
+    char crashDbg[2] = {0};
+    if (GetEnvironmentVariableA("SENTINELUI_CRASH_TEST", crashDbg, 2) == 1 && crashDbg[0] == '1') {
+        SUI_LOG_WARN("SENTINELUI_CRASH_TEST=1: raising test exception (crash handler verification).");
+        RaiseException(0xE0000001u, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+    }
 
     // Debug escape hatch for out-of-game smoke tests (HostProbe): no window,
     // no hooks — just start the helper + open frames.
@@ -298,7 +321,11 @@ void ToggleDemoLayer() {
 
 extern "C" {
 
-int SuiGetApiVersion(void) { return SUI_API_VERSION; }
+int SuiGetApiVersion(void) {
+    // A duplicate module copy (two ASI paths loaded in one process) stays inert;
+    // report it as incompatible so managed clients refuse it and use the real one.
+    return sui_host::g_duplicateInstance ? -1 : SUI_API_VERSION;
+}
 
 void SuiPumpEvents(void) {
     // Drain helper->ASI events into the managed sink (game thread by contract).
@@ -404,8 +431,23 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
         DisableThreadLibraryCalls(hinstDLL);
         using namespace sui_host;
         g_hinst = hinstDLL;
+
+        // Single-instance guard: if a second copy of this module gets loaded in
+        // the same process (e.g. a stray root+subfolder deploy), it must not boot
+        // a second helper or install a second hook chain. It stays inert and
+        // reports API version -1 (see SuiGetApiVersion). The mutex handle is kept
+        // open for the process lifetime to hold the claim.
+        HANDLE instanceMutex = CreateMutexW(nullptr, FALSE, L"Local\\SentinelUI_Host_Instance_v1");
+        if (instanceMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+            g_duplicateInstance = true;
+            TraceF("dllmain: duplicate host instance - this module stays inert");
+            return TRUE;
+        }
+
         TraceF("dllmain: attach");
         g_paths.moduleDir = ModuleDir();
+        // The module lives at the GAME ROOT (ScriptHookV must load it before RPH;
+        // see the header comment), so runtime data lives under <module>\SentinelUI\.
         g_paths.helperExe = g_paths.moduleDir + L"\\SentinelUI_Host.exe";
         g_paths.contentDir = g_paths.moduleDir + L"\\SentinelUI\\content";
         // Boot layer rides the sentinelui:// scheme (issue #2). file:// is gone

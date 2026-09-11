@@ -17,6 +17,7 @@ add_subdirectory("${MINHOOK_ROOT}" minhook_build)
 add_library(sentinel_asi SHARED
   host.cpp
   suilog.cpp
+  crash.cpp
   hooks.cpp
   ipc.cpp
   layers.cpp

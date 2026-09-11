@@ -1,0 +1,2 @@
+"Index","StartedAt","QuitMode","ReadySeconds","CleanExit","Forced","Orphans","DumpsAdded","GtaRssStartMB","GtaRssEndMB","HelperRssEndMB","CefRssEndMB","RssGrowthMB","ErrorsInLog","DeviceLost","KilledFocus","CaptureToggles","RphBootstrapOk","RphUnloadOk","Pass","Notes"
+"1","2026-09-10T16:17:01","Kill",,"False","False","0","0",,,,,,"0","0","0","0","False","False","False","FAILED: GTA5.exe did not start within 300s."

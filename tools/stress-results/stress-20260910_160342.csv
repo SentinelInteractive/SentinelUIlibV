@@ -1,0 +1,3 @@
+"Index","StartedAt","ReadySeconds","CleanExit","Forced","Orphans","DumpsAdded","GtaRssStartMB","GtaRssEndMB","HelperRssEndMB","CefRssEndMB","RssGrowthMB","ErrorsInLog","DeviceLost","KilledFocus","CaptureToggles","RphBootstrapOk","RphUnloadOk","Pass","Notes"
+"1","2026-09-10T16:03:42",,"False","False","0","0",,,,,,"0","0","0","0","False","False","False","FAILED: GTA5.exe did not start within 180s."
+"2","2026-09-10T16:06:44","151,3","False","False","0","0","1624,7",,,,,"0","0","0","0","False","False","False","FAILED: GTA window is not foreground (foreground=199386, gta=13174516). Aborting to avoid injecting input elsewhere."

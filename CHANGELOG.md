@@ -4,6 +4,61 @@ All notable changes. Format loosely follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Added / Fixed — 2026-09-11 (safe load path + fast orphan cleanup)
+- **Bootstrap is attach-only** — `Sui.Initialize(..., loadIfNeeded:false)` attaches to the
+  ASI-loader-hosted module via `GetModuleHandle("SentinelUI.asi")` and never `LoadLibrary`s it
+  in-game (RPH's Present-hook guard reverts late hooks — 2026-09-11 crash, see LESSONS §2).
+  Missing ASI loader => clear log + no-op, no crash. `FreeLibrary` only for modules the API
+  itself loaded (offline probes). HostProbe gained an attach-only degradation check.
+- **Single-instance guard** — the ASI takes `Local\SentinelUI_Host_Instance_v1` in `DllMain`;
+  a stray second module copy (root + subfolder) stays inert and reports API version -1.
+- **Helper fast-exit** — the host passes `--parent-pid=<game pid>`; the helper waits on the game
+  process and shuts down immediately when it dies (kill/crash), instead of the 30 s pipe-down
+  guard (kept as fallback for hosts without the argument).
+- **Docs acknowledge the ScriptHookV loader requirement** (README + PLAN §2/§3) and the public,
+  obfuscated-runtime distribution model; README no longer claims a "no ScriptHookV dependency".
+
+### Fixed / Changed — 2026-09-11 (root ASI load order is load-bearing; subfolder experiment reverted)
+- **Tried relocating the runtime into `<game>\SentinelUI\` with Bootstrap cold-loading the ASI**
+  (to remove the ScriptHookV headless-host mode). It crashes instantly in-game: RPH's hook
+  guard detects the foreign Present hook installed *after* its own and reverts it
+  (`Hook on our Present hook detected / Restoring untouched D3D11Present`), breaking the D3D
+  chain — own minidump + RPH crashreport show the AV in `dxgi!Present` at the reverted
+  address. Reverted: `SentinelUI.asi` stays in the game root (ScriptHookV loads it at process
+  start, before RPH hooks Present) and Bootstrap attaches to the already-loaded module.
+  Constraint documented in README / STRESS-TEST / GATE-P1 and `native/host/host.cpp`.
+  A subfolder layout requires replacing the Present detour with an RPH-native render path
+  (`Game.RawFrameRender`/Graphics) — follow-up work.
+- Managed host-path fallbacks (`Bootstrap.ResolveHostPath`, `Sui.Initialize`) and
+  `stress.ps1` preflight restored to the root locations; no behavior change otherwise.
+
+### Fixed / Added — 2026-09-10 (stress tooling + hardening for issue #4)
+- **Capture auto-releases on focus loss** — `WM_KILLFOCUS`/`WM_ACTIVATE` while
+  captured now synthesize key-ups for every forwarded key, release capture and
+  restore the cursor (`hooks.cpp`). Previously F10 could stay latched through an
+  alt-tab and the page could think a key was still held.
+- **DXGI device-lost recovery** — `Present`/`ResizeBuffers` failures with
+  `DXGI_ERROR_DEVICE_REMOVED`/`RESET` drop all device resources and re-init on the
+  next frame from the game's (re)created device/swapchain; failure retries are
+  rate-limited to 1/s so a dead device cannot churn or spam the log.
+- **Minidump capture** — host and helper install an unhandled-exception filter
+  (`native/host/crash.{h,cpp}`) that writes `SentinelUI\logs\<prefix>_<ts>_pid<PID>.dmp`
+  and chains to the previous filter. Fixed buffers only (safe on a corrupted heap).
+  Test hooks: helper `--crash-test`, host `SENTINELUI_CRASH_TEST=1`.
+- **Stress harness** — `tools\stress.ps1` (unattended N-session loop: RPH launch,
+  ready/bootstrap wait, scenario, RSS/handle sampling, quit modes, orphan/dump/log
+  checks, CSV+JSON results) plus `tools\scenario-lib.ps1` / `tools\scenario.ps1`
+  (LayerChurn, CaptureAltTab, Resize, DeviceLost, GameBar, HudTicks, QuitGame).
+  See `docs/STRESS-TEST.md`. Verified 2026-09-10: first green session, focus-loss
+  capture release in-game, helper orphan guard ×3 (~30s), Steam launch-dialog
+  auto-approval, force-foreground for background operation.
+- **Field lesson** — ScriptHookV auto-loads `SentinelUI.asi` in the game root even
+  without RPH, producing a headless host with no graceful shutdown; the harness
+  therefore launches `RagePluginHook.exe` by default and fails sessions where
+  Bootstrap never loaded (unless `-AllowNoBootstrap`). GTA's own UI ignores
+  synthetic input, so story-mode start and quit confirmation are manual (`-QuitMode
+  Kill` for unattended, `-QuitMode Manual` for clean-shutdown checks).
+
 ### Added — 2026-09-09 (Issue #2 milestone: layer stack + content scheme)
 - **Layer model (host export table v3)** — `SuiCreateLayer` (ids ≥ 2; budget 8, id 1 = boot
   layer), `SuiCloseLayer`, `SuiSetLayerVisible/IsLayerVisible`, `SuiSetLayerZ/GetLayerZ`,

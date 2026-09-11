@@ -36,6 +36,30 @@ Hard-won knowledge from building SentinelUI (2026-09-08). Every item below was
   cleanly; order determines stacking.
 - **Plugins live in `<game>\Plugins\`**; LSPDFR itself is such a plugin; LSPDFR loads callout
   plugins itself. `scripts\` is *not* RPH's folder.
+- **ScriptHookV auto-loads every `.asi` in the game root** (`dinput8.dll` runs before RPH
+  initializes). A launch that bypasses the RPH launcher therefore *still* starts
+  `SentinelUI.asi` — a **headless host**: hooks + helper run, but without Bootstrap there is no
+  `Sui.Initialize`, no event pump and no graceful `SuiShutdown`. Observed 2026-09-10: the game
+  wedged in termination (zombie process; helpers stayed alive because the pipe never dropped,
+  and no `Shutdown requested` was ever logged). Test harnesses must launch via
+  `RagePluginHook.exe` and treat a missing `[SentinelUI] Bootstrap ready` as a failed session.
+- **Root ASI loading is also load-order-critical — RPH's Present-hook guard reverts foreign
+  hooks installed after its own.** Tried the "clean" alternative on 2026-09-11: move
+  `SentinelUI.asi` into `<game>\SentinelUI\` and have Bootstrap `LoadLibrary` it at plugin
+  load. Instant crash: RPH detected the hook we installed after it
+  (`Hook on our Present hook detected / Restoring untouched D3D11Present`) and rewrote the
+  function; the D3D chain (GTA → Steam overlay → ShadowLib → `dxgi!Present`) then AV'd at the
+  restored address. Our own minidump + RPH `crashreport` confirmed it. Conclusion: the ASI
+  must be root-loaded by ScriptHookV *before* RPH arms its guard, and Bootstrap may only
+  attach to the already-loaded module. A subfolder layout requires rendering through RPH
+  (`Game.RawFrameRender`/`Graphics`) instead of a Present detour.
+- **GTA V's own UI ignores synthetic input.** SendInput keyboard/mouse, posted `WM_KEY*`,
+  `WM_ACTIVATE(APP)`, `WM_SYSCOMMAND/SC_CLOSE` and `WM_QUERYENDSESSION`/`WM_ENDSESSION` were
+  all ignored by the game's quit prompt (DirectInput/RawInput input path), while the
+  SentinelUI F9 hotkey still worked because the ASI reads WndProc messages directly.
+  Consequence for tooling: unattended harnesses can drive SentinelUI itself, but cannot
+  click "Ja" on the quit prompt or start story mode from the landing page — plan a manual
+  step, or accept the kill/orphan-guard path for shutdown-lifecycle verification.
 - **Log discipline**: LSPDFR/RPH logging is extremely verbose (1.2 MB of `[TRACE]` noise from a
   session with a couple of plugins). A UI runtime must write its **own logs** and emit only a
   handful of lifecycle lines into RagePluginHook.log.

@@ -1,0 +1,2 @@
+"Index","StartedAt","QuitMode","ReadySeconds","CleanExit","Forced","Orphans","DumpsAdded","GtaRssStartMB","GtaRssEndMB","HelperRssEndMB","CefRssEndMB","RssGrowthMB","ErrorsInLog","DeviceLost","KilledFocus","CaptureToggles","RphBootstrapOk","RphUnloadOk","Pass","Notes"
+"1","2026-09-10T16:27:25","Kill","220,3","False","True","0","0","1658,1","1666,8","51,4","0","8,7","0","0","0","1","False","False","True","force-killed (QuitMode=Kill)"

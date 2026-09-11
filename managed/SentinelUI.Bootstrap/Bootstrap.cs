@@ -61,14 +61,18 @@ namespace SentinelUI.Bootstrap
                 var hostPath = ResolveHostPath();
                 if (hostPath == null)
                 {
-                    Game.LogTrivial("[SentinelUI] SentinelUI.asi not found — install the SentinelUI runtime " +
-                                    "(SentinelUI\\SentinelUI.asi). Plugins will degrade gracefully.");
+                    Game.LogTrivial("[SentinelUI] SentinelUI.asi not found in the game root — install the " +
+                                    "SentinelUI runtime (root ASI, loaded by ScriptHookV). Plugins will degrade gracefully.");
                     return;
                 }
 
-                if (!SentinelUI.Sui.Initialize(hostPath))
+                // Attach-only: the ASI must have been loaded by the ASI loader (ScriptHookV)
+                // at process start. Bootstrap never LoadLibrary's it — RPH's Present-hook guard
+                // reverts hooks installed after its own and crashes the D3D chain (2026-09-11).
+                if (!SentinelUI.Sui.Initialize(hostPath, loadIfNeeded: false))
                 {
-                    Game.LogTrivial("[SentinelUI] Host initialization failed — see SentinelUI\\logs\\sentinelui_api_*.log.");
+                    Game.LogTrivial("[SentinelUI] Host not loaded — is ScriptHookV installed and SentinelUI.asi " +
+                                    "in the game root? See SentinelUI\\logs\\sentinelui_api_*.log. UI disabled.");
                     return;
                 }
 
@@ -169,12 +173,17 @@ namespace SentinelUI.Bootstrap
             var wd = Environment.CurrentDirectory; // game root when launched via RPH
             var baseDir = AppDomain.CurrentDomain.BaseDirectory; // <game>\Plugins\ when loaded by RPH
 
+            // The host ASI must live at the GAME ROOT: ScriptHookV auto-loads it at
+            // process start, BEFORE RPH installs its Present hook. Bootstrap then
+            // attaches to the already-loaded module (LoadLibrary of the same path
+            // returns the existing handle). Cold-loading later makes RPH's hook
+            // guard revert our Present hook and crash the D3D chain (2026-09-11).
             string[] candidates =
             {
-                Path.Combine(wd, "SentinelUI", "SentinelUI.asi"),
+                Path.Combine(wd, "SentinelUI", "SentinelUI.asi"),   // future split layout
                 Path.Combine(baseDir, "..", "SentinelUI", "SentinelUI.asi"),
                 Path.Combine(baseDir, "SentinelUI", "SentinelUI.asi"),
-                Path.Combine(wd, "SentinelUI.asi"), // dev convenience copy
+                Path.Combine(wd, "SentinelUI.asi"),                 // canonical (root, SHV-loaded)
             };
 
             foreach (var candidate in candidates)

@@ -26,7 +26,8 @@ add_executable(sentinel_helper WIN32
   helper_app.cpp
   ipc.cpp
   scheme.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../host/suilog.cpp)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../host/suilog.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../host/crash.cpp)
 SET_EXECUTABLE_TARGET_PROPERTIES(sentinel_helper)
 target_include_directories(sentinel_helper PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../host)
 set_target_properties(sentinel_helper PROPERTIES

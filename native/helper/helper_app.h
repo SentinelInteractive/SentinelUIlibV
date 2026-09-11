@@ -53,6 +53,7 @@ struct HelperConfig {
     int selftestPaints = 12;
     int timeoutSeconds = 0;      // 0 = run forever (until Shutdown)
     bool selftest = false;
+    unsigned long parentPid = 0; // game process pid (fast orphan cleanup)
 };
 
 // ---------------------------------------------------------------------------
@@ -300,6 +301,12 @@ int RunBrowserProcess(const HelperConfig& cfg);
 
 // Registers the IPC command handler (call after StartIpc).
 void SetupIpcCommands();
+
+// Parent-process watchdog (helper fast-exit): waits on the game process passed
+// via --parent-pid and reports once it exits, so the pump loop can quit
+// immediately instead of relying on the 30s pipe-down orphan guard.
+void StartParentWatchdog(unsigned long parentPid);
+bool ParentProcessGone();
 
 }  // namespace sui_helper
 

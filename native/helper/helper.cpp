@@ -14,9 +14,12 @@
 #include "helper_app.h"
 #include "scheme.h"
 #include "suilog.h"
+#include "../host/crash.h"
 
 #include <cwchar>
 #include <string>
+#include <atomic>
+#include <thread>
 
 namespace {
 
@@ -55,6 +58,35 @@ std::wstring ModuleDir() {
 
 }  // namespace
 
+namespace sui_helper {
+
+namespace {
+std::atomic<bool> g_parentGone{false};
+}
+
+void StartParentWatchdog(unsigned long parentPid) {
+    if (!parentPid) return;
+    // SYNCHRONIZE is enough to wait on the process handle; same user/session as
+    // the game, so no elevation is needed.
+    HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parentPid);
+    if (!parent) {
+        SUI_LOG_WARN("parent watchdog: OpenProcess(%lu) failed (%lu); relying on pipe guard.",
+                     parentPid, GetLastError());
+        return;
+    }
+    std::thread([parent]() {
+        WaitForSingleObject(parent, INFINITE);
+        CloseHandle(parent);
+        g_parentGone.store(true);
+        SUI_LOG_WARN("parent process exited; fast shutdown.");
+    }).detach();
+    SUI_LOG_INFO("parent watchdog armed (pid %lu).", parentPid);
+}
+
+bool ParentProcessGone() { return g_parentGone.load(); }
+
+}  // namespace sui_helper
+
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // CEF subprocess dispatch (this exe doubles as renderer/utility child).
     // The app is passed in so subprocesses register the sentinelui:// standard
@@ -90,11 +122,21 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     if (cfg.logDir.empty()) cfg.logDir = cfg.moduleDir + L"\\SentinelUI\\logs";
     cfg.pipeName = GetArg(cmdline, L"pipe");
     if (cfg.pipeName.empty()) cfg.pipeName = L"\\\\.\\pipe\\SentinelUI";
+    cfg.parentPid = wcstoul(GetArg(cmdline, L"parent-pid").c_str(), nullptr, 10);
 
     sui_host::Log::Initialize(cfg.logDir, L"sentinelui_helper");
+    sui_host::InstallCrashHandler(cfg.logDir, L"sentinelui_helper");
+    StartParentWatchdog(cfg.parentPid);
     SUI_LOG_INFO("SentinelUI_Host starting (content=%ls, shm=%ls, view=%dx%d, selftest=%d).",
                  cfg.contentFile.c_str(), cfg.shmName.c_str(), cfg.viewWidth, cfg.viewHeight,
                  cfg.selftest ? 1 : 0);
+
+    // Test-only: --crash-test raises a synthetic exception right after the crash
+    // handler is installed so minidump capture can be verified without a real crash.
+    if (HasFlag(cmdline, L"crash-test")) {
+        SUI_LOG_WARN("--crash-test: raising test exception (crash handler verification).");
+        RaiseException(0xE0000001u, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+    }
 
     // Default content root for the scheme: plugin "sui" -> <exe dir>\SentinelUI\content.
     Roots().SetDefaultRoot(cfg.moduleDir + L"\\SentinelUI\\content");

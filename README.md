@@ -3,7 +3,13 @@
 A **UI library for RagePluginHook (RPH) and LSPDFR** plugins in GTA V single player.
 Plugin authors build in-game interfaces from plain **HTML/CSS/JS web components**, rendered by a
 dedicated **Chromium (CEF)** process and composited onto the game — callable from LSPDFR callout
-plugins and RPH plugins, with **no ScriptHookV / ScriptHookVDotNet dependency**.
+plugins and RPH plugins, with **no ScriptHookVDotNet dependency**.
+
+**Loader requirement:** the native host (`SentinelUI.asi`) must be loaded at process start by an
+**ASI loader (ScriptHookV)** — it hooks the swapchain *before* RPH arms its Present-hook guard.
+The RPH plugin only attaches to that loaded module (it never `LoadLibrary`s it); if no ASI loader
+loads the host, SentinelUI degrades to a clean no-op instead of crashing. Why it has to be this
+way: `docs/LESSONS-LEARNED.md` §2 (2026-09-11 field test).
 
 ```
 WEB LAYER      <sui-panel> <sui-button> <sui-list> ... plain HTML/CSS/JS pages
@@ -55,7 +61,8 @@ Tracked in GitHub issues: https://github.com/maminka19482/SentinelUIlib/issues
 ## Current deploy layout (GTA V root)
 
 ```
-<game>\SentinelUI.asi          ASI compositor (auto-loaded like any ASI)
+<game>\SentinelUI.asi          ASI compositor — MUST stay in the root: ScriptHookV
+                               loads it at process start, before RPH's Present hook
 <game>\SentinelUI_Host.exe     dedicated CEF process
 <game>\libcef.dll + runtime    flat at root, next to the ASI
 <game>\locales\
@@ -63,10 +70,19 @@ Tracked in GitHub issues: https://github.com/maminka19482/SentinelUIlib/issues
 <game>\Plugins\                SentinelUI.Bootstrap.dll (+ API.dll)
 ```
 
+> **Load-order constraint (2026-09-11):** moving the ASI into `SentinelUI\` and cold-loading
+> it from Bootstrap crashed the game — RPH detected the foreign Present hook installed after
+> its own and reverted the function (`Hook on our Present hook detected / Restoring untouched
+> D3D11Present`), breaking the D3D chain (AV in `dxgi!Present`). The root + ScriptHookV load
+> path is load-bearing until the Present hook is replaced by an RPH-native render path.
+> Full field note in `docs/LESSONS-LEARNED.md`.
+
 ## Target environment (verified)
 
 - GTA V **Legacy** (not Enhanced) — proven on Steam, build 1.0.3889.x, D3D11
 - RagePluginHook 1.131.x (SDK on NuGet: 1.124.0), LSPD First Response 0.4.9
+- ScriptHookV (ASI loader) — required to load the root `SentinelUI.asi` at process start; without
+  it the overlay is disabled and the log says so (graceful, no crash)
 - Windows 10/11 x64, .NET Framework 4.8, no SHVDN required
 
 ## Build
@@ -76,7 +92,10 @@ Tracked in GitHub issues: https://github.com/maminka19482/SentinelUIlib/issues
   via `tools\init-cef.ps1`, pinned in `native\third_party\cef-current.json`)
 - Deploy: `tools\pack.ps1` (copies to the game folder; reversible)
 
-## License
+## Distribution & license
 
-TBD (project license not yet chosen — ask maintainer). CEF is BSD-licensed; attribution ships with
-the runtime.
+SentinelUI is distributed **publicly**; the managed API + docs are the plugin-author surface.
+Released native runtime binaries (`SentinelUI.asi`, `SentinelUI_Host.exe`, CEF payload) may be
+shipped **obfuscated** — build against the documented `Sui*` API rather than reverse engineering
+the runtime. License: TBD (ask the maintainer before redistributing or bundling). CEF is
+BSD-licensed; its attribution ships with the runtime (`SentinelUI\LICENSE_CEF.txt`).

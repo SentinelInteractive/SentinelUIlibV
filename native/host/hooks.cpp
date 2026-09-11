@@ -17,6 +17,7 @@
 
 #include <d3d11.h>
 #include <atomic>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -38,6 +39,32 @@ namespace {
 HWND g_gameWindow = nullptr;
 WNDPROC g_oldWndProc = nullptr;
 bool g_hooked = false;
+
+// Keys currently forwarded to a page while captured (VK -> scan code, extended).
+// Game-thread only: WndProc and capture transitions both run on the game thread.
+std::map<UINT, std::pair<UINT, bool>> g_keysDown;
+
+// Focus loss must not leave the page thinking a key is still held, and must not
+// leave the game with its controls disabled. Synthesize key-ups, then release.
+void ReleaseCapturedKeys() {
+    if (g_keysDown.empty()) return;
+    int id = g_layers.KeyTarget();
+    if (id) {
+        for (const auto& kv : g_keysDown) {
+            SendCommand("K" + std::to_string(id) + " 0 " + std::to_string(kv.first) + " " +
+                        std::to_string(kv.second.first) + " " +
+                        (kv.second.second ? "1" : "0") + "\n");
+        }
+    }
+    g_keysDown.clear();
+}
+
+void FocusLost() {
+    if (!g_capture) return;
+    SUI_LOG_INFO("capture released on focus loss.");
+    ReleaseCapturedKeys();
+    SetCaptureState(false);
+}
 
 // Frame staging buffer (shared scratch; helper publishes up to 4K BGRA per
 // layer — each layer's newest frame is copied in and uploaded immediately).
@@ -167,6 +194,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     bool ext = (lParam >> 24) & 1;
                     SendCommand("K" + std::to_string(id) + " 1 " + std::to_string(vk) + " " +
                                 std::to_string(sc) + " " + (ext ? "1" : "0") + "\n");
+                    g_keysDown[vk] = std::make_pair(sc, ext);
                     return 0;
                 }
             }
@@ -175,6 +203,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_KEYUP:
         case WM_SYSKEYUP:
             if (g_capture) {
+                g_keysDown.erase((UINT)wParam);
                 int id = g_layers.KeyTarget();
                 if (id) {
                     UINT vk = (UINT)wParam;
@@ -236,6 +265,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         case WM_KILLFOCUS:
             SUI_LOG_INFO("WM_KILLFOCUS (alt-tab).");
+            FocusLost();
+            break;
+        case WM_ACTIVATE:
+            if (LOWORD(wParam) == WA_INACTIVE) FocusLost();
             break;
         default:
             break;
@@ -246,10 +279,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     // Lazy resource init + viewport sync from the very first Present, regardless
     // of frame availability (input scaling must exist even before first paint).
-    if (g_swapChain != swapChain || !g_renderer.ready()) {
-        g_swapChain = swapChain;
-        if (g_renderer.EnsureResources(swapChain)) {
-            g_viewportSent = false;
+    static uint64_t s_nextEnsureAttempt = 0;
+    const bool newSwapChain = (g_swapChain != swapChain);
+    if (newSwapChain || !g_renderer.ready()) {
+        const uint64_t now = GetTickCount64();
+        if (newSwapChain || now >= s_nextEnsureAttempt) {
+            g_swapChain = swapChain;
+            if (g_renderer.EnsureResources(swapChain)) {
+                g_viewportSent = false;
+                s_nextEnsureAttempt = 0;
+            } else {
+                // Device lost / mid-recreate: retry at most once a second so a
+                // dead device cannot churn or spam the log every frame.
+                s_nextEnsureAttempt = now + 1000;
+            }
         }
     }
     SyncViewport();
@@ -277,12 +320,28 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
         s_wasComposited = false;
     }
 
-    return g_origPresent(swapChain, syncInterval, flags);
+    HRESULT hr = g_origPresent(swapChain, syncInterval, flags);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+        // Device-lost recovery: drop every device-dependent resource and let the
+        // next Present re-init from whatever device/swapchain the game hands us
+        // (GTA V recreates both on a driver reset). Force a full layer re-upload
+        // so the stack reappears in the same frame rendering comes back.
+        SUI_LOG_WARN("device lost (Present hr=0x%08lX); dropping resources, re-init on next frame.",
+                     (unsigned long)hr);
+        g_renderer.Invalidate();
+        g_swapChain = nullptr;
+        g_viewportSent = false;
+        s_wasComposited = false;
+    }
+    return hr;
 }
 
 HRESULT WINAPI ResizeBuffersHook(IDXGISwapChain* swapChain, UINT count, UINT w, UINT h,
                                  DXGI_FORMAT format, UINT flags) {
     HRESULT hr = g_origResize(swapChain, count, w, h, format, flags);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+        g_swapChain = nullptr;   // force a full re-init on the next Present
+    }
     g_renderer.Invalidate();
     g_viewportSent = false;
     return hr;

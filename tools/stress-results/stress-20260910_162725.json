@@ -1,0 +1,23 @@
+{
+  "Index": 1,
+  "StartedAt": "2026-09-10T16:27:25",
+  "QuitMode": "Kill",
+  "ReadySeconds": 220.3,
+  "CleanExit": false,
+  "Forced": true,
+  "Orphans": 0,
+  "DumpsAdded": 0,
+  "GtaRssStartMB": 1658.1,
+  "GtaRssEndMB": 1666.8,
+  "HelperRssEndMB": 51.4,
+  "CefRssEndMB": 0.0,
+  "RssGrowthMB": 8.7,
+  "ErrorsInLog": 0,
+  "DeviceLost": 0,
+  "KilledFocus": 0,
+  "CaptureToggles": 1,
+  "RphBootstrapOk": false,
+  "RphUnloadOk": false,
+  "Pass": true,
+  "Notes": "force-killed (QuitMode=Kill)"
+}

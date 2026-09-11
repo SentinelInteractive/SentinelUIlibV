@@ -29,6 +29,8 @@ namespace SentinelUI.HostProbe
             Check(layer == null, "CreateLayer returns null when host unavailable");
             Check(!Sui.HostAvailable, "HostAvailable is false");
             Sui.Pump(); // must be a safe no-op
+            Check(!Sui.Initialize(null, loadIfNeeded: false),
+                  "attach-only Initialize degrades when no ASI loader loaded the host (never LoadLibrary)");
 
             // 2. Initialize from an explicit path (the Bootstrap plugin will pass an absolute path).
             Console.WriteLine("[2] load & handshake");

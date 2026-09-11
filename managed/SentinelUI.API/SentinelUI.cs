@@ -69,11 +69,15 @@ namespace SentinelUI
         public static void SetCapture(bool on) => NativeHost.SetCapture(on);
 
         /// <summary>
-        /// Initializes the bridge. Searches common locations for the host module:
-        /// current directory (game root when launched by RPH) and the &lt;game&gt;\SentinelUI\ folder.
+        /// Initializes the bridge.
+        /// In-game (<c>loadIfNeeded:false</c>, what Bootstrap uses) this only ATTACHES to the
+        /// ASI-loader-hosted module: ScriptHookV loads the root SentinelUI.asi at process start,
+        /// before RPH arms its Present-hook guard (see NativeHost for the 2026-09-11 crash
+        /// constraint). The default (<c>true</c>) additionally LoadLibrary's the host from
+        /// <paramref name="explicitHostPath"/> or the standard locations, for offline probes/tests.
         /// Safe to call multiple times.
         /// </summary>
-        public static bool Initialize(string explicitHostPath = null)
+        public static bool Initialize(string explicitHostPath = null, bool loadIfNeeded = true)
         {
             lock (Gate)
             {
@@ -85,9 +89,23 @@ namespace SentinelUI
 
                 if (HostAvailable) return true;
 
+                if (!loadIfNeeded)
+                {
+                    // Attach-only: the path is irrelevant (GetModuleHandle by module name).
+                    if (NativeHost.Initialize(null, allowLoad: false))
+                    {
+                        // Wire the native event sink once (game thread pump -> here).
+                        NativeHost.RegisterEventSink(DispatchRawEvent);
+                        return true;
+                    }
+                    return false;   // NativeHost logged the reason (e.g. ASI loader missing)
+                }
+
                 var candidates = new List<string>();
                 if (!string.IsNullOrWhiteSpace(explicitHostPath)) candidates.Add(explicitHostPath);
                 candidates.Add(Path.Combine(Environment.CurrentDirectory, "SentinelUI", "SentinelUI.asi"));
+                // Canonical in-game location: the ASI is SHV-loaded from the game root
+                // (must hook Present before RPH; see Bootstrap.ResolveHostPath).
                 candidates.Add(Path.Combine(Environment.CurrentDirectory, "SentinelUI.asi")); // dev convenience
 
                 foreach (var candidate in candidates)
@@ -100,8 +118,9 @@ namespace SentinelUI
                     }
                 }
 
-                SuiLog.Warn("SentinelUI host not found in any standard location. " +
-                            "Install the SentinelUI runtime (SentinelUI\\SentinelUI.asi + Plugins\\SentinelUI.Bootstrap.dll).");
+                SuiLog.Warn("SentinelUI host not found in any standard location. Install the " +
+                            "SentinelUI runtime (root SentinelUI.asi loaded by ScriptHookV + " +
+                            "Plugins\\SentinelUI.Bootstrap.dll).");
                 return false;
             }
         }
