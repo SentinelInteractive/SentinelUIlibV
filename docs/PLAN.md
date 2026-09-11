@@ -26,10 +26,12 @@ NATIVE HOST     SentinelUI.asi (C++20, pinned CEF). Own dedicated CEF thread + m
                 buffer -> D3D11 texture -> gamma-correct quad in Present. Layer stack with
                 z-order/visibility/click-through/focus. C exports + per-token SPSC event queues.
                 Minidump handler + structured logs.
-MANAGED API     SentinelUI.API.dll (net472 x64, no SHVDN). Static facade, DllImport of host exports
-                (or LoadLibrary by absolute path). Events delivered ONLY on the thread calling Pump()
-                (game thread by contract => handlers may call natives). Per-domain registration tokens,
-                AppDomain.DomainUnload auto-unregister, epoch/tombstone guards, strong delegate refs.
+MANAGED API     SentinelUI.API.dll (net48 x64, no SHVDN). Static facade; LoadLibrary only for offline
+                probes (in-game: attaches to the ASI-loader-hosted module). Owner vs client domains:
+                each AppDomain registers a per-domain event queue (host API v4, SuiRegisterEventClient)
+                and pumps its own queue on the calling thread (game-thread contract => handlers may
+                call natives). Client DomainUnload closes its layers + unregisters its queue; only the
+                owner (Bootstrap) calls SuiShutdown. Version handshake refuses hosts < v3.
 BOOTSTRAP       SentinelUI.Bootstrap.dll (RPH plugin, <game>\Plugins\). Attach-only host owner:
                 GetModuleHandle("SentinelUI.asi") — NEVER LoadLibrary in-game (RPH's hook guard
                 reverts Present hooks installed after its own; the ASI loader must load the root
@@ -58,14 +60,15 @@ BOOTSTRAP       SentinelUI.Bootstrap.dll (RPH plugin, <game>\Plugins\). Attach-o
 4. Input: WndProc forwarding; capture-owning GameFiber (DISABLE_CONTROL_ACTION set) while a
    capture-focused layer is visible (managed side owns control blocking); virtual cursor + host cursor;
    focus-loss => synthesized key-ups + WasHidden; IME workstream (Phase 4 stretch).
-5. Managed API: static facade; events queued per token; Pump() drains on game thread; auto-unregister on
-   DomainUnload; plugin authors bundle API DLL next to their plugin.
+5. Managed API: static facade; per-AppDomain event tokens + bounded queues (host v4); Pump() drains the
+   calling domain's queue on the game thread; client domains never own shutdown; DomainUnload
+   auto-unregisters and closes the domain's layers; plugin authors bundle the API DLL next to their plugin.
 6. Cross-domain: native-host-only shared state.
 7. Content: sentinelui:// scheme, registered roots, local-only by default, CSP, hot reload.
 8. Protocol: versioned JSON envelope; JS->host = CefMessageRouter; host->JS = postMessage;
    managed<->host = typed SPSC queues w/ caps + SuiPumpEvents.
-9. Web toolkit: zero-framework custom elements (sui-panel/button/list/form/notify/...), CSS-variable
-   theme, no build step. Auto-pump + no-host graceful degradation = mandatory DX requirements.
+9. Web toolkit: **NOT PLANNED** (2026-09-11) — SentinelUI stays a generic HTML/CSS/JS renderer;
+   component libraries live in userland. Issue #5 closed.
 10. Testing: real install D:\SteamLibrary\...\Grand Theft Auto V (RPH 1.131 + LSPDFR 0.4.9).
 11. Licensing: own code; CEF BSD notices shipped; WebUI archive = behavioral spec ONLY (no binaries).
 12. Out of scope: GTA V Enhanced (D3D12), FiveM/RageMP, Online (RPH disables), SHVDN-only setups,
@@ -86,9 +89,9 @@ BOOTSTRAP       SentinelUI.Bootstrap.dll (RPH plugin, <game>\Plugins\). Attach-o
   rendering, ResizeBuffers/device-lost recovery, minidump + structured logging, version handshake.
 - **P3 Managed API + samples**: API assembly complete, Bootstrap console commands, RPH sample,
   LSPDFR callout sample (case screen with live game data via natives from pump thread), packaging,
-  NuGet (API DLL only).
-- **P4 Web toolkit**: components, theme, browser-runnable gallery, hot reload, i18n-ready; optional
-  JS->native request bridge using natives.json codegen.
+  NuGet (API DLL only). In progress 2026-09-11: cross-domain clients, inline HTML, version handshake
+  landed (API 0.3/host v4); samples + NuGet pending.
+- **P4 Web toolkit**: NOT PLANNED — removed 2026-09-11 (issue #5 closed).
 - **P5 Hardening & release**: 30-min RSS test (<400 MB delta), layer budget (<=3 visible), crash-pack
   triage runbook, version.json matrix (RPH 1.124->1.131+), CEF notices, release zip, wiki.
 

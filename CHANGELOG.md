@@ -4,6 +4,30 @@ All notable changes. Format loosely follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Added — 2026-09-11 (issue #3: API 0.3 — cross-domain clients, inline HTML, handshake)
+- **Per-AppDomain event queues (host export table v4)** — `SuiRegisterEventClient` /
+  `SuiUnregisterEventClient` / `SuiPumpEventClient`: every inbound event is copied to each
+  registered domain's bounded queue (oldest dropped + logged) and delivered only on that
+  domain's `Pump()` thread — no cross-domain delegate calls. Legacy
+  `SuiRegisterEventSink`/`SuiPumpEvents` still work for v3 hosts/API assemblies.
+- **Owner vs client model** — only Bootstrap (or an offline probe) owns the host: attaches,
+  pumps, calls `SuiShutdown`. Plugin AppDomains attach lazily as clients (`Sui.AttachClient`,
+  or first API use): never `LoadLibrary`, never shutdown; their `DomainUnload` closes their
+  layers and unregisters their queue. Fixes "one plugin unload kills the UI for everyone" and
+  "last Initializer steals all events".
+- **`Sui.CreateLayerFromHtml(html, baseUrl)`** — in-memory pages via a `data:text/html` URL,
+  with an optional injected `<base href>` for relative subresources; scheme responses now send
+  `Access-Control-Allow-Origin: *` so data:-URL layers can load `sentinelui://` assets.
+- **Version handshake** — API 0.3.0 refuses hosts older than export table v3 with a clear
+  error and warns when a v3 host lacks client queues; `version.json` bumped to `hostExports 4`.
+  Duplicate host modules report API `-1` (per-process single-instance mutex).
+- **HostProbe** — new inline-HTML round-trip and a real cross-AppDomain client test (LSPDFR
+  domain shape): the client domain creates a layer, pumps its own queue and receives its event
+  while the owner keeps pumping. Per-layer routing no longer broadcasts events for unknown
+  native layer ids (those belong to other domains).
+- **P4 web toolkit removed from the plan** (issue #5 closed): SentinelUI stays a generic
+  renderer; component libraries are userland.
+
 ### Added / Fixed — 2026-09-11 (safe load path + fast orphan cleanup)
 - **Bootstrap is attach-only** — `Sui.Initialize(..., loadIfNeeded:false)` attaches to the
   ASI-loader-hosted module via `GetModuleHandle("SentinelUI.asi")` and never `LoadLibrary`s it

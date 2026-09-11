@@ -52,8 +52,10 @@ take the game down.**
 - ✅ **P2**: input capture + JS↔C# bridge **verified in-game** (issue #1). Layer stack +
   `sentinelui://` scheme **verified in-game** (issue #2, 2026-09-10 sessions: two layers,
   z-order, click-through routing, F9/F11 toggles, per-layer viewport) — see `docs/GATE-P2.md`.
-- ⏳ **P3**: full managed API + RPH/LSPDFR samples + NuGet + version handshake — issue #3.
-- ⏳ **P4**: web component toolkit (`sui-*`, theme, gallery) — issue #5.
+- ⏳ **P3 in progress**: cross-domain event clients (API 0.3), inline-HTML layers, version
+  handshake — samples/NuGet still open (issue #3).
+- ❌ **P4 (web toolkit): not planned** — SentinelUI stays a generic HTML/CSS/JS renderer;
+  component libraries live in userland (issue #5 closed).
 - ⏳ **P5**: hardening & release (perf gates, crash capture, coexistence, packaging) — issue #6.
 
 Tracked in GitHub issues: https://github.com/maminka19482/SentinelUIlib/issues

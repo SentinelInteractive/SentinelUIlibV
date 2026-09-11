@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using System.Threading;
 
 namespace SentinelUI.HostProbe
 {
@@ -66,7 +69,13 @@ namespace SentinelUI.HostProbe
             // 3b. Issue-2 smoke (layer stack + sentinelui:// scheme) — needs the helper running.
             Issue2(init);
 
-            // 3c. Issue-1 smoke (IPC + capture + events) — needs the helper running.
+            // 3c. Issue-3 smoke (inline HTML layer) — needs the helper running.
+            Issue3InlineHtml(init);
+
+            // 3d. Issue-3 smoke (cross-AppDomain event client) — the LSPDFR domain model.
+            CrossDomain(init);
+
+            // 3e. Issue-1 smoke (IPC + capture + events) — needs the helper running.
             Issue1(init);
 
             // 4. Graceful shutdown + repeat-safe behavior.
@@ -78,6 +87,68 @@ namespace SentinelUI.HostProbe
 
             Console.WriteLine(_failures == 0 ? "PROBE RESULT: PASS" : $"PROBE RESULT: FAIL ({_failures})");
             Environment.ExitCode = _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>Issue #3: in-memory HTML layer (data: URL) runs its JS and reports back.</summary>
+        private static void Issue3InlineHtml(bool init)
+        {
+            if (!init || !Sui.HostAvailable) return;
+            Console.WriteLine("[7] issue-3 inline HTML layer (CreateLayerFromHtml)");
+            var layer = Sui.CreateLayerFromHtml(
+                "<!DOCTYPE html><html><body><script>console.log('NUI_HTML:inline-ok');</script></body></html>");
+            Check(layer != null, "CreateLayerFromHtml returns a layer");
+            if (layer == null) return;
+
+            var events = new List<string>();
+            Action<SuiMessage> handler = m => { lock (events) events.Add(m.Type + "|" + m.PayloadJson); };
+            Sui.MessageReceived += handler;
+            try
+            {
+                layer.SetVisible(true);
+                var start = Environment.TickCount;
+                bool seen = false;
+                while (Environment.TickCount - start < 6000)
+                {
+                    Sui.Pump();
+                    lock (events)
+                        seen = events.Exists(e => e.IndexOf("NUI_HTML:inline-ok", StringComparison.Ordinal) >= 0);
+                    if (seen) break;
+                    Thread.Sleep(50);
+                }
+                Check(seen, "inline page JS ran through the data: URL");
+            }
+            finally
+            {
+                Sui.MessageReceived -= handler;
+                layer.Close();
+            }
+        }
+
+        /// <summary>Issue #3: a second AppDomain attaches as a client and must receive its
+        /// own events without owning the host (Bootstrap stays the owner).</summary>
+        private static void CrossDomain(bool init)
+        {
+            if (!init || !Sui.HostAvailable) return;
+            Console.WriteLine("[8] issue-3 cross-AppDomain event client");
+            string apiDir = Path.GetDirectoryName(typeof(Program).Assembly.Location);
+            AppDomain domain = null;
+            try
+            {
+                domain = AppDomain.CreateDomain("SentinelUI.HostProbe.Client");
+                var client = (CrossDomainProbe)domain.CreateInstanceFromAndUnwrap(
+                    typeof(Program).Assembly.Location, typeof(CrossDomainProbe).FullName);
+                string result = client.Run(apiDir);
+                Check(result.StartsWith("ok:", StringComparison.Ordinal),
+                      "client domain attaches and receives its own events (" + result + ")");
+            }
+            catch (Exception ex)
+            {
+                Check(false, "cross-domain probe threw: " + ex.Message);
+            }
+            finally
+            {
+                if (domain != null) AppDomain.Unload(domain);
+            }
         }
 
         private static void Issue2(bool init)
@@ -241,6 +312,56 @@ namespace SentinelUI.HostProbe
             catch (Exception ex)
             {
                 Check(false, "issue-1 smoke threw: " + ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs in a separate AppDomain for the issue-#3 cross-domain test. Uses the public API
+    /// exactly like an LSPDFR plugin would: attach as a client, create a layer, pump its own
+    /// event queue — never touching host lifecycle (no Initialize/Shutdown).
+    /// </summary>
+    public sealed class CrossDomainProbe : MarshalByRefObject
+    {
+        public string Run(string apiDir)
+        {
+            // The API DLL sits next to the probe exe; the client domain needs help resolving it.
+            AppDomain.CurrentDomain.AssemblyResolve += (s, e) =>
+            {
+                var name = new AssemblyName(e.Name).Name;
+                if (!string.Equals(name, "SentinelUI.API", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                string path = Path.Combine(apiDir ?? string.Empty, "SentinelUI.API.dll");
+                return File.Exists(path) ? Assembly.LoadFrom(path) : null;
+            };
+
+            if (!Sui.AttachClient())
+                return "attach failed (host not loaded by an ASI loader)";
+
+            var layer = Sui.CreateLayer("sentinelui://probe/issue1.html");
+            if (layer == null) return "client CreateLayer refused";
+
+            var got = new List<string>();
+            Action<SuiMessage> handler = m => { lock (got) got.Add(m.Type + "|" + m.PayloadJson); };
+            layer.Message += handler;
+            try
+            {
+                layer.SetVisible(true);
+                layer.ExecuteJs("console.log('NUI_CDOM:hello');");
+                var start = Environment.TickCount;
+                while (Environment.TickCount - start < 6000)
+                {
+                    Sui.Pump();   // this domain's queue only; the owner pumps its own
+                    lock (got) { if (got.Count > 0) break; }
+                    Thread.Sleep(25);
+                }
+                lock (got)
+                    return got.Count > 0 ? "ok:" + got[0] : "no events";
+            }
+            finally
+            {
+                layer.Message -= handler;
+                layer.Close();
             }
         }
     }

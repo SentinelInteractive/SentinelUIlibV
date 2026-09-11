@@ -30,6 +30,15 @@ void SetEventSink(void (*cb)(const char* utf8));
 // Drain all queued events through the registered sink (called by SuiPumpEvents).
 void DrainEventsToSink();
 
+// ---- host API v4: per-client event queues (cross-AppDomain delivery) ----
+// Each AppDomain registers once; every inbound event line is copied into every
+// client queue (bounded) by whichever pump runs first. PumpEventClient drains
+// only the calling client's queue on the calling thread, so each domain can
+// dispatch to its own delegates without cross-domain calls.
+unsigned long long RegisterEventClient();
+void UnregisterEventClient(unsigned long long token);
+void PumpEventClient(unsigned long long token, void (*cb)(const char* utf8));
+
 }  // namespace sui_host
 
 #endif

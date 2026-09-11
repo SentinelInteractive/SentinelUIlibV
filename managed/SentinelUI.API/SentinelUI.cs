@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 
 namespace SentinelUI
@@ -15,6 +16,9 @@ namespace SentinelUI
         private static readonly object Gate = new object();
         private static readonly List<SuiLayer> Layers = new List<SuiLayer>();
         private static bool _logReady;
+        private static bool _attached;       // bridge attached in this AppDomain
+        private static bool _isOwner;        // Bootstrap/probe: shutdown rights + legacy sink
+        private static bool _attachFailed;   // suppress repeated "host missing" logs
 
         /// <summary>True when the native host is loaded and API-compatible.</summary>
         public static bool HostAvailable => NativeHost.IsAvailable;
@@ -49,12 +53,12 @@ namespace SentinelUI
             {
                 if (nativeId > 0)
                 {
-                    // Route to the owning layer (fall back to broadcast when unknown).
+                    // Route to the owning layer. Unknown ids (e.g. layers owned by another
+                    // AppDomain) must NOT broadcast per-layer — only the global event fires.
                     SuiLayer target = null;
                     foreach (var l in Layers)
                         if (l.NativeId == nativeId) { target = l; break; }
-                    if (target != null) target.RaiseMessage(msg);
-                    else foreach (var layer in Layers) layer.RaiseMessage(msg);
+                    target?.RaiseMessage(msg);
                 }
                 else
                 {
@@ -66,39 +70,33 @@ namespace SentinelUI
 
         /// <summary>Enables/disables input capture. While enabled the Bootstrap's pump
         /// fiber disables game controls so typing/clicks go to the UI.</summary>
-        public static void SetCapture(bool on) => NativeHost.SetCapture(on);
+        public static void SetCapture(bool on)
+        {
+            if (!EnsureAttached()) return;
+            NativeHost.SetCapture(on);
+        }
 
         /// <summary>
-        /// Initializes the bridge.
-        /// In-game (<c>loadIfNeeded:false</c>, what Bootstrap uses) this only ATTACHES to the
-        /// ASI-loader-hosted module: ScriptHookV loads the root SentinelUI.asi at process start,
-        /// before RPH arms its Present-hook guard (see NativeHost for the 2026-09-11 crash
-        /// constraint). The default (<c>true</c>) additionally LoadLibrary's the host from
+        /// Initializes the bridge as the session OWNER (Bootstrap / offline probes).
+        /// In-game (<c>loadIfNeeded:false</c>) this only ATTACHES to the ASI-loader-hosted
+        /// module: ScriptHookV loads the root SentinelUI.asi at process start, before RPH
+        /// arms its Present-hook guard (see NativeHost for the 2026-09-11 crash constraint).
+        /// The default (<c>true</c>) additionally LoadLibrary's the host from
         /// <paramref name="explicitHostPath"/> or the standard locations, for offline probes/tests.
-        /// Safe to call multiple times.
+        /// Plugin AppDomains do NOT need to call this: the first API call attaches lazily as a
+        /// non-owner client (per-domain event queue, no shutdown rights). Safe to call repeatedly.
         /// </summary>
         public static bool Initialize(string explicitHostPath = null, bool loadIfNeeded = true)
         {
             lock (Gate)
             {
-                if (!_logReady)
-                {
-                    SuiLog.Initialize(Path.Combine(Environment.CurrentDirectory, "SentinelUI", "logs"));
-                    _logReady = true;
-                }
-
-                if (HostAvailable) return true;
+                EnsureLog();
+                if (_attached) return HostAvailable;
 
                 if (!loadIfNeeded)
                 {
                     // Attach-only: the path is irrelevant (GetModuleHandle by module name).
-                    if (NativeHost.Initialize(null, allowLoad: false))
-                    {
-                        // Wire the native event sink once (game thread pump -> here).
-                        NativeHost.RegisterEventSink(DispatchRawEvent);
-                        return true;
-                    }
-                    return false;   // NativeHost logged the reason (e.g. ASI loader missing)
+                    return AttachLocked(owner: true);
                 }
 
                 var candidates = new List<string>();
@@ -112,8 +110,7 @@ namespace SentinelUI
                 {
                     if (NativeHost.Initialize(candidate))
                     {
-                        // Wire the native event sink once (game thread pump -> here).
-                        NativeHost.RegisterEventSink(DispatchRawEvent);
+                        CompleteAttachLocked(owner: true);
                         return true;
                     }
                 }
@@ -125,6 +122,81 @@ namespace SentinelUI
             }
         }
 
+        private static void EnsureLog()
+        {
+            if (_logReady) return;
+            SuiLog.Initialize(Path.Combine(Environment.CurrentDirectory, "SentinelUI", "logs"));
+            _logReady = true;
+        }
+
+        /// <summary>Lazy attach for client AppDomains (LSPDFR plugins etc.). Never
+        /// LoadLibrary's the host in-game; returns false when it isn't loaded.</summary>
+        private static bool EnsureAttached()
+        {
+            if (_attached && HostAvailable) return true;
+            lock (Gate)
+            {
+                if (_attached && HostAvailable) return true;
+                return AttachLocked(owner: false);
+            }
+        }
+
+        /// <summary>Attaches this AppDomain as a non-owner event client. The first API use
+        /// does this automatically; call it explicitly to fail fast. Plugin AppDomains use
+        /// this — only Bootstrap owns the host lifecycle (see <see cref="Initialize"/>).</summary>
+        public static bool AttachClient() => EnsureAttached();
+
+        private static bool AttachLocked(bool owner)
+        {
+            EnsureLog();
+            if (NativeHost.ShutdownRequested) return false;   // host already shut down this session
+            if (!NativeHost.IsAvailable && !NativeHost.Initialize(null, allowLoad: false))
+            {
+                if (!_attachFailed)
+                {
+                    _attachFailed = true;
+                    SuiLog.Warn("SentinelUI host is not loaded in this process (ASI loader missing?) — " +
+                                "UI features are disabled for this AppDomain.");
+                }
+                return false;
+            }
+            CompleteAttachLocked(owner);
+            return true;
+        }
+
+        private static void CompleteAttachLocked(bool owner)
+        {
+            if (_attached) return;
+            _attached = true;
+            _isOwner = owner;
+
+            if (NativeHost.SupportsClientEvents)
+            {
+                // Per-domain queue: events are delivered by Pump() on this domain's thread.
+                NativeHost.RegisterEventClient(DispatchRawEvent);
+            }
+            else if (owner)
+            {
+                // Host v3: single legacy sink. Only the owner may install it.
+                NativeHost.RegisterEventSink(DispatchRawEvent);
+            }
+            else
+            {
+                SuiLog.Warn("Host is v3 (no per-domain queues): client AppDomains receive no events. " +
+                            "Update the SentinelUI runtime for cross-domain event delivery.");
+            }
+
+            if (owner)
+            {
+                AppDomain.CurrentDomain.DomainUnload += OnOwnerDomainUnload;
+                AppDomain.CurrentDomain.ProcessExit += OnOwnerProcessExit;
+            }
+            else
+            {
+                AppDomain.CurrentDomain.DomainUnload += OnClientDomainUnload;
+            }
+        }
+
         /// <summary>
         /// Creates a UI layer from a URL — <c>sentinelui://&lt;plugin&gt;/&lt;path&gt;</c> for
         /// plugin content (root registered via <see cref="RegisterContentRoot"/>), or an
@@ -133,15 +205,14 @@ namespace SentinelUI
         /// Returns null (with a logged warning) when the host is unavailable, the layer
         /// budget is exhausted, or the URL was refused — plugins must handle null so the
         /// game keeps running without the SentinelUI runtime installed.
-        /// Raw HTML (<c>CreateLayerFromHtml</c>) lands with the P3 managed API work.
         /// </summary>
         public static SuiLayer CreateLayer(string url)
         {
-            if (!HostAvailable) { SuiLog.Warn("CreateLayer ignored: host unavailable."); return null; }
+            if (!EnsureAttached()) return null;
             if (string.IsNullOrWhiteSpace(url)) { SuiLog.Warn("CreateLayer ignored: empty URL."); return null; }
             if (url.TrimStart().StartsWith("<", StringComparison.Ordinal))
             {
-                SuiLog.Warn("CreateLayer: raw HTML needs CreateLayerFromHtml (P3); refusing: " +
+                SuiLog.Warn("CreateLayer: raw HTML needs CreateLayerFromHtml; refusing: " +
                             Truncate(url, 60));
                 return null;
             }
@@ -161,17 +232,52 @@ namespace SentinelUI
         }
 
         /// <summary>
+        /// Creates a layer from an in-memory HTML document (no content root needed).
+        /// The page becomes a <c>data:text/html</c> URL. When <paramref name="baseUrl"/> is
+        /// given, it is injected as &lt;base href&gt; so relative script/CSS URLs resolve
+        /// against it (sentinelui:// responses are CORS-open for this case). Self-contained
+        /// pages need no base URL. Keep documents small — they travel through the IPC pipe
+        /// and live in the page URL.
+        /// </summary>
+        public static SuiLayer CreateLayerFromHtml(string html, string baseUrl = null)
+        {
+            if (string.IsNullOrWhiteSpace(html))
+            {
+                SuiLog.Warn("CreateLayerFromHtml ignored: empty HTML.");
+                return null;
+            }
+
+            string page = html;
+            if (!string.IsNullOrWhiteSpace(baseUrl))
+            {
+                string tag = "<base href=\"" + baseUrl.TrimEnd('/') + "/\">";
+                int head = page.IndexOf("<head", StringComparison.OrdinalIgnoreCase);
+                if (head >= 0)
+                {
+                    int gt = page.IndexOf('>', head);
+                    if (gt > 0) page = page.Insert(gt + 1, tag);
+                }
+                else
+                {
+                    page = "<head>" + tag + "</head>" + page;
+                }
+            }
+
+            string dataUrl = "data:text/html;charset=utf-8;base64," +
+                             Convert.ToBase64String(Encoding.UTF8.GetBytes(page));
+            SuiLayer layer = CreateLayer(dataUrl);
+            if (layer != null) SuiLog.Info($"Layer created from inline HTML (native id {layer.NativeId}).");
+            return layer;
+        }
+
+        /// <summary>
         /// Registers a plugin content root for the sentinelui:// scheme:
         /// <c>sentinelui://&lt;pluginName&gt;/&lt;file&gt;</c> serves files from <paramref name="rootPath"/>.
         /// Local-only: traversal outside the root is refused by the helper.
         /// </summary>
         public static bool RegisterContentRoot(string pluginName, string rootPath)
         {
-            if (!HostAvailable)
-            {
-                SuiLog.Warn("RegisterContentRoot ignored: host unavailable.");
-                return false;
-            }
+            if (!EnsureAttached()) return false;
             bool ok = NativeHost.RegisterContentRoot(pluginName, rootPath);
             SuiLog.Info(ok
                 ? $"Content root registered: sentinelui://{pluginName}/ -> {rootPath}"
@@ -179,24 +285,60 @@ namespace SentinelUI
             return ok;
         }
 
-        /// <summary>Drains host event queues. Call once per game frame from the game thread
-        /// (Bootstrap does this automatically; LSPDFR plugins call it from their per-frame code,
-        /// or use the pump fiber helper once P3 ships).</summary>
+        /// <summary>Drains queued UI events for THIS AppDomain. Call once per game frame
+        /// from the game thread (Bootstrap does it automatically). Every AppDomain has its
+        /// own queue, so plugin handlers may safely call game natives: delivery happens on
+        /// the caller's thread.</summary>
         public static void Pump()
         {
-            if (HostAvailable) NativeHost.PumpEvents();
+            if (!EnsureAttached()) return;
+            if (NativeHost.HasClientToken) NativeHost.PumpClientEvents();
+            else if (_isOwner) NativeHost.PumpEvents();      // v3 host legacy sink
+            // Non-owner on a v3 host: no event path (warned at attach).
         }
 
-        /// <summary>Graceful host shutdown. Only the Bootstrap plugin's unload path should call this.
-        /// Never call from DllMain/PROCESS_DETACH contexts.</summary>
+        /// <summary>Graceful host shutdown. Only the OWNER (Bootstrap unload path) may call
+        /// this; in a client AppDomain it just detaches that domain's event queue. Never call
+        /// from DllMain/PROCESS_DETACH contexts.</summary>
         public static void Shutdown()
         {
+            if (!_isOwner)
+            {
+                lock (Gate)
+                {
+                    NativeHost.UnregisterEventClient();
+                    _attached = false;
+                }
+                return;
+            }
             NativeHost.Shutdown();
         }
 
         internal static void RemoveLayer(SuiLayer layer)
         {
             lock (Gate) { Layers.Remove(layer); }
+        }
+
+        private static void OnOwnerDomainUnload(object sender, EventArgs e) => Shutdown();
+        private static void OnOwnerProcessExit(object sender, EventArgs e) => Shutdown();
+
+        /// <summary>Client AppDomain teardown: close the layers it owns and release its
+        /// event queue. Never touches the host lifecycle (Bootstrap owns that).</summary>
+        private static void OnClientDomainUnload(object sender, EventArgs e)
+        {
+            try
+            {
+                lock (Gate)
+                {
+                    foreach (var layer in Layers.ToArray())
+                    {
+                        try { layer.Close(); } catch { /* domain is going away */ }
+                    }
+                    NativeHost.UnregisterEventClient();
+                    _attached = false;
+                }
+            }
+            catch { /* nothing to do at unload */ }
         }
 
         private static string Truncate(string value, int max)

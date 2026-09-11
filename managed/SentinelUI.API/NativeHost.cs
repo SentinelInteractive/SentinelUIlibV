@@ -119,6 +119,22 @@ namespace SentinelUI
         private static SuiCloseLayerDelegate _reloadLayer;
         private static SuiRegisterRootDelegate _registerContentRoot;
 
+        // ---- issue #3 exports (host v4: per-client event queues); additive ----
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate ulong SuiRegisterClientDelegate();
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiUnregisterClientDelegate(ulong token);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void SuiPumpClientDelegate(ulong token, IntPtr callback);
+
+        private static SuiRegisterClientDelegate _registerEventClient;
+        private static SuiUnregisterClientDelegate _unregisterEventClient;
+        private static SuiPumpClientDelegate _pumpEventClient;
+        private static ulong _clientToken;                 // 0 = this domain has no client queue
+        private static SuiEventSinkNative _clientSink;     // GC guard for the native callback
+
         private static IntPtr _module;
         private static bool _ownsModule;   // true only when WE LoadLibrary'd it (probe/tests)
         private static int _apiVersion;
@@ -128,6 +144,7 @@ namespace SentinelUI
         private static bool _shutdownRequested;
 
         public static bool IsAvailable => _module != IntPtr.Zero && _apiVersion >= 1 && !_shutdownRequested;
+        public static bool ShutdownRequested => _shutdownRequested;
         public static int ApiVersion => _apiVersion;
         public static IntPtr ModuleHandle => _module;
 
@@ -205,11 +222,23 @@ namespace SentinelUI
                 _reloadLayer = LoadExport<SuiCloseLayerDelegate>("SuiReloadLayer");
                 _registerContentRoot = LoadExport<SuiRegisterRootDelegate>("SuiRegisterContentRoot");
 
-                if (_apiVersion < 1)
+                // issue #3 exports (per-client event queues; host v4+, additive)
+                _registerEventClient = LoadExport<SuiRegisterClientDelegate>("SuiRegisterEventClient");
+                _unregisterEventClient = LoadExport<SuiUnregisterClientDelegate>("SuiUnregisterEventClient");
+                _pumpEventClient = LoadExport<SuiPumpClientDelegate>("SuiPumpEventClient");
+
+                if (_apiVersion < 3)
                 {
-                    SuiLog.Error($"Host API version {_apiVersion} is not supported by this API assembly.");
+                    // Version handshake: this API assembly needs the layer model.
+                    SuiLog.Error($"Host API v{_apiVersion} is too old for this API assembly (needs v3+). " +
+                                 "Update the SentinelUI runtime (SentinelUI.asi + SentinelUI_Host.exe).");
                     Detach();
                     return false;
+                }
+                if (_apiVersion < 4)
+                {
+                    SuiLog.Warn($"Host API v{_apiVersion} predates per-domain event queues (v4): only the " +
+                                "Bootstrap domain receives events; plugin AppDomains get none. Update the runtime.");
                 }
 
                 // Per-domain lifetime: if this AppDomain (plugin) goes away while the host keeps
@@ -273,6 +302,58 @@ namespace SentinelUI
             _registerSink(fnPtr);
         }
 
+        // ---- issue #3 API (per-client event queues; host v4+) ----
+
+        /// <summary>True when the host supports per-AppDomain event queues.</summary>
+        public static bool SupportsClientEvents =>
+            _registerEventClient != null && _unregisterEventClient != null && _pumpEventClient != null;
+
+        /// <summary>True when this AppDomain owns an event client queue.</summary>
+        public static bool HasClientToken => _clientToken != 0;
+
+        /// <summary>
+        /// Registers this AppDomain as an event client: inbound events are copied to a
+        /// per-domain queue and delivered by <see cref="PumpClientEvents"/> on the caller's
+        /// thread — no cross-domain delegate calls. Returns 0 on a v3 host (fall back to
+        /// the legacy single sink / owner mode).
+        /// </summary>
+        public static ulong RegisterEventClient(Action<string> handler)
+        {
+            if (!SupportsClientEvents || handler == null) return 0;
+            if (_clientToken != 0) return _clientToken;
+            ulong token = _registerEventClient();
+            if (token == 0) return 0;
+            SuiEventSinkNative sink = (line) => { try { handler(line); } catch { /* never fail the host */ } };
+            _clientSink = sink;   // keep alive for the native callback
+            _clientToken = token;
+            SuiLog.Info($"Event client registered (token {token}).");
+            return token;
+        }
+
+        public static void UnregisterEventClient()
+        {
+            if (_clientToken == 0) return;
+            try { _unregisterEventClient?.Invoke(_clientToken); } catch { /* host may be gone */ }
+            _clientToken = 0;
+            _clientSink = null;
+        }
+
+        /// <summary>Drains this client's queue through its handler on the caller thread
+        /// (must be the game thread when handlers touch game natives).</summary>
+        public static void PumpClientEvents()
+        {
+            if (_clientToken == 0 || _pumpEventClient == null || _clientSink == null) return;
+            try
+            {
+                IntPtr cb = Marshal.GetFunctionPointerForDelegate(_clientSink);
+                _pumpEventClient(_clientToken, cb);
+            }
+            catch (Exception ex)
+            {
+                SuiLog.Error("PumpClientEvents failed: " + ex);
+            }
+        }
+
         // ---- issue #2 API (layer stack + content scheme; host v3+) ----
         public static bool SupportsLayerModel => _createLayer != null && _closeLayer != null;
 
@@ -315,6 +396,7 @@ namespace SentinelUI
             _shutdownRequested = true;
             try
             {
+                UnregisterEventClient();   // host is alive here; drop our queue first
                 SuiLog.Info("Shutting down native host...");
                 _shutdown?.Invoke();
             }

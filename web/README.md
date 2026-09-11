@@ -1,19 +1,15 @@
-# web/ — SentinelUI web component toolkit
+# web/ — demo content for the `sentinelui://` scheme
 
-Not yet scaffolded (Phase 4). Planned contents — zero-framework, zero-build custom elements:
+Not a component toolkit. SentinelUI is a **generic renderer**: pages bring their own
+HTML/CSS/JS, and plugin authors own their UI. This folder only ships the in-game
+demo/acceptance pages that `pack.ps1` deploys to `<game>\SentinelUI\content\`:
 
 ```
-components/
-  sui-panel       sui-button      sui-list       sui-form
-  sui-input       sui-notify      sui-badge      sui-progress    sui-keybind
-sui-theme.css     (CSS-variable theme, GTA/LSPDFR-styled presets)
-sui.js            (message-envelope runtime, focus/blur visibility, hot reload)
-gallery/          (component gallery — runs in a normal browser too)
+p1_demo.html / p1_demo.js      boot layer (P1/P2 acceptance: input, cursor, events, hot reload)
+demo_hud.html / demo_hud.js    F11 overlay strip (layer stacking + click-through)
+selftest_page.html             helper self-test page (file:// baseline, tests only)
 ```
 
-Design rules:
-- Web Components standard (custom elements + shadow DOM), vanilla JS, no framework, no build step.
-- Runtime communicates through the versioned envelope `{v,id,layer,type,payload}`:
-  JS→host via CefMessageRouter queries; host→JS via `window.postMessage`.
-- Content is served from `sentinelui://<plugin>/<path>` — local-only by default, CSP-tight.
-- DX requirement: consumers must never care about the pump; pages are plain web pages.
+A `sui-*` component library (custom elements, theme, gallery) is **explicitly out of
+scope** — it would make the renderer opinionated and duplicate plain web tech
+(issue #5, closed 2026-09-11). Component libraries belong in userland.

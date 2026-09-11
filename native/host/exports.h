@@ -1,9 +1,11 @@
-// SentinelUI native host — exported C API contract (v3).
+// SentinelUI native host — exported C API contract.
 // MUST stay in sync with managed/SentinelUI.API/NativeHost.cs.
 //
 // v3 = issue #2 (multi-layer stack + sentinelui:// content scheme), additive
 //      to the v2 layer/command exports. Layer ids: 1 = boot layer; ids >= 2
 //      are allocated by SuiCreateLayer.
+// v4 = issue #3 (cross-AppDomain event clients), additive to v3. Old API
+//      assemblies keep working through SuiRegisterEventSink/SuiPumpEvents.
 
 #pragma once
 #ifndef SENTINEL_HOST_EXPORTS_H
@@ -11,7 +13,7 @@
 
 #include <stdint.h>
 
-#define SUI_API_VERSION 3
+#define SUI_API_VERSION 4
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +65,17 @@ __declspec(dllexport) int  SuiRegisterContentRoot(const char* pluginUtf8,
 // Event flow (unchanged shape, new body prefix):
 //   helper -> pipe -> queue -> SuiPumpEvents -> sink
 //   sink line: "<nativeLayerId>|<kind>:<body>" (e.g. "1|console:NUI_...").
+
+// ---- issue #3 exports (per-client event queues, host API v4) ----
+// Cross-AppDomain delivery: each domain registers a client (token), and pumps
+// only its own queue on its own thread. Every inbound event is copied to every
+// client queue by whichever client (or legacy sink) pumps first. Queues are
+// bounded (oldest events dropped + logged). Register returns 0 on failure.
+__declspec(dllexport) unsigned long long SuiRegisterEventClient(void);
+__declspec(dllexport) void SuiUnregisterEventClient(unsigned long long token);
+__declspec(dllexport) void SuiPumpEventClient(unsigned long long token,
+// Drain the calling client's queue through cb (called on the caller's thread).
+                                              void (*cb)(const char* utf8));
 
 #ifdef __cplusplus
 }

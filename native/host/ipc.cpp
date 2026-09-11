@@ -39,6 +39,17 @@ std::atomic<int> g_epoch{0};           // bumped on every helper connect
 
 void (*g_sink)(const char*) = nullptr;
 
+// ---- per-client event queues (host API v4, cross-AppDomain delivery) ----
+struct EventClient {
+    unsigned long long token = 0;
+    std::vector<std::string> queue;
+    unsigned long long dropped = 0;
+};
+std::mutex g_clientsMutex;
+std::vector<EventClient> g_clients;
+std::atomic<unsigned long long> g_nextClientToken{1};
+constexpr size_t kMaxClientQueue = 512;   // oldest events dropped on overflow
+
 HANDLE CreateWaiter(HANDLE* outEvent) {
     // Auto-reset: waited-on once per pending operation; a manual-reset event
     // stays signaled and makes later waits return before completion.
@@ -283,15 +294,66 @@ bool EventQueuePop(std::string& out) {
 void SetEventSink(void (*cb)(const char* utf8)) { g_sink = cb; }
 
 namespace {
-void RunSink(const std::string& line) { if (g_sink) g_sink(line.c_str()); }
-}  // namespace
 
-void DrainEventsToSink() {
+void RunSink(const std::string& line) { if (g_sink) g_sink(line.c_str()); }
+
+// Pop the inbound queue once; deliver to the legacy sink (if any) and copy every
+// line into all registered client queues. Called by every pump entry point, so
+// whichever domain pumps first in a frame distributes to everyone.
+void DrainInbound() {
     for (;;) {
         std::string line;
         if (!EventQueuePop(line)) break;
         RunSink(line);
+        std::lock_guard<std::mutex> lock(g_clientsMutex);
+        for (auto& c : g_clients) {
+            if (c.queue.size() >= kMaxClientQueue) {
+                c.queue.erase(c.queue.begin());
+                ++c.dropped;
+                if (c.dropped == 1)
+                    SUI_LOG_WARN("event client %llu queue overflow; dropping oldest events.",
+                                 c.token);
+            }
+            c.queue.push_back(line);
+        }
     }
+}
+
+}  // namespace
+
+void DrainEventsToSink() { DrainInbound(); }
+
+unsigned long long RegisterEventClient() {
+    EventClient c;
+    c.token = g_nextClientToken.fetch_add(1);
+    std::lock_guard<std::mutex> lock(g_clientsMutex);
+    g_clients.push_back(std::move(c));
+    SUI_LOG_INFO("event client %llu registered.", g_clients.back().token);
+    return g_clients.back().token;
+}
+
+void UnregisterEventClient(unsigned long long token) {
+    std::lock_guard<std::mutex> lock(g_clientsMutex);
+    for (auto it = g_clients.begin(); it != g_clients.end(); ++it) {
+        if (it->token == token) {
+            SUI_LOG_INFO("event client %llu unregistered (dropped %llu).", token, it->dropped);
+            g_clients.erase(it);
+            return;
+        }
+    }
+}
+
+void PumpEventClient(unsigned long long token, void (*cb)(const char* utf8)) {
+    DrainInbound();   // first pumper distributes this frame's events to all clients
+    if (!cb) return;
+    std::vector<std::string> batch;
+    {
+        std::lock_guard<std::mutex> lock(g_clientsMutex);
+        for (auto& c : g_clients) {
+            if (c.token == token) { batch.swap(c.queue); break; }
+        }
+    }
+    for (const auto& line : batch) cb(line.c_str());
 }
 
 }  // namespace sui_host

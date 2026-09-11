@@ -211,6 +211,10 @@ public:
         headers.insert({"Content-Security-Policy", kContentCsp});
         headers.insert({"Cache-Control", "no-store"});       // hot reload
         headers.insert({"X-Content-Type-Options", "nosniff"});
+        // Local-only content, but data:-URL layers (CreateLayerFromHtml) have an
+        // opaque origin: allow them to load scheme subresources (scripts/CSS)
+        // with an explicit base URL.
+        headers.insert({"Access-Control-Allow-Origin", "*"});
         response->SetHeaderMap(headers);
         response_length = (int64_t)data_.size();
     }

@@ -424,6 +424,20 @@ int SuiRegisterContentRoot(const char* pluginUtf8, const char* rootPathUtf8) {
     return 1;
 }
 
+// ---- issue #3 exports (per-client event queues, host API v4) ----
+
+unsigned long long SuiRegisterEventClient(void) {
+    return sui_host::RegisterEventClient();
+}
+
+void SuiUnregisterEventClient(unsigned long long token) {
+    sui_host::UnregisterEventClient(token);
+}
+
+void SuiPumpEventClient(unsigned long long token, void (*cb)(const char* utf8)) {
+    sui_host::PumpEventClient(token, cb);
+}
+
 }  // extern "C"
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
@@ -435,9 +449,13 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
         // Single-instance guard: if a second copy of this module gets loaded in
         // the same process (e.g. a stray root+subfolder deploy), it must not boot
         // a second helper or install a second hook chain. It stays inert and
-        // reports API version -1 (see SuiGetApiVersion). The mutex handle is kept
-        // open for the process lifetime to hold the claim.
-        HANDLE instanceMutex = CreateMutexW(nullptr, FALSE, L"Local\\SentinelUI_Host_Instance_v1");
+        // reports API version -1 (see SuiGetApiVersion). The name is per-process
+        // (pid) so an unrelated process -- a probe or a second game instance --
+        // does not collide with this one. The handle is kept open for the
+        // process lifetime to hold the claim.
+        std::wstring instanceName = L"Local\\SentinelUI_Host_Instance_v1_" +
+                                    std::to_wstring(GetCurrentProcessId());
+        HANDLE instanceMutex = CreateMutexW(nullptr, FALSE, instanceName.c_str());
         if (instanceMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
             g_duplicateInstance = true;
             TraceF("dllmain: duplicate host instance - this module stays inert");
