@@ -72,7 +72,10 @@ namespace SentinelUI.HostProbe
             // 3c. Issue-3 smoke (inline HTML layer) — needs the helper running.
             Issue3InlineHtml(init);
 
-            // 3d. Issue-3 smoke (cross-AppDomain event client) — the LSPDFR domain model.
+            // 3d. Issue-3 smoke (request/response bridge) — needs the helper running.
+            Issue4Requests(init);
+
+            // 3e. Issue-3 smoke (cross-AppDomain event client) — the LSPDFR domain model.
             CrossDomain(init);
 
             // 3e. Issue-1 smoke (IPC + capture + events) — needs the helper running.
@@ -120,6 +123,59 @@ namespace SentinelUI.HostProbe
             finally
             {
                 Sui.MessageReceived -= handler;
+                layer.Close();
+            }
+        }
+
+        /// <summary>Issue #3 bridge v2: window.sui request -> C# SuiLayer.Request/Reply -> JS promise.</summary>
+        private static void Issue4Requests(bool init)
+        {
+            if (!init || !Sui.HostAvailable) return;
+            Console.WriteLine("[9] issue-3 request/response bridge (window.sui)");
+            var layer = Sui.CreateLayerFromHtml(
+                "<!DOCTYPE html><html><body><script>" +
+                "sui.request('probe.echo',{n:42}).then(function(r){" +
+                "console.log('NUI_PROBE:reply '+JSON.stringify(r));});" +
+                "</script></body></html>");
+            Check(layer != null, "request layer created");
+            if (layer == null) return;
+
+            var got = new List<string>();
+            var requests = new List<string>();
+            Action<SuiMessage> onMessage = m =>
+            {
+                if (m.Layer == layer) lock (got) got.Add(m.Type + "|" + m.PayloadJson);
+            };
+            Action<SuiRequest> onRequest = r =>
+            {
+                if (r.Type != "probe.echo") return;
+                lock (requests) requests.Add(r.PayloadJson);
+                r.Reply(new { echo = "pong", got = r.PayloadJson });
+            };
+            layer.Message += onMessage;
+            layer.Request += onRequest;
+            try
+            {
+                layer.SetVisible(true);
+                var start = Environment.TickCount;
+                bool seen = false;
+                while (Environment.TickCount - start < 6000)
+                {
+                    Sui.Pump();
+                    lock (got)
+                        seen = got.Exists(e => e.IndexOf("NUI_PROBE:reply", StringComparison.Ordinal) >= 0);
+                    if (seen) break;
+                    Thread.Sleep(25);
+                }
+                lock (requests)
+                    Check(requests.Count == 1 && requests[0].IndexOf("42", StringComparison.Ordinal) >= 0,
+                          "C# received the typed request payload");
+                Check(seen, "page promise resolved with the C# reply");
+            }
+            finally
+            {
+                layer.Message -= onMessage;
+                layer.Request -= onRequest;
                 layer.Close();
             }
         }
@@ -348,24 +404,39 @@ namespace SentinelUI.HostProbe
 
             var got = new List<string>();
             Action<SuiMessage> handler = m => { lock (got) got.Add(m.Type + "|" + m.PayloadJson); };
+            Action<SuiRequest> requestHandler = r =>
+            {
+                if (r.Type == "cdom.echo") r.Reply(new { ok = true, got = r.PayloadJson });
+            };
             layer.Message += handler;
+            layer.Request += requestHandler;
             try
             {
                 layer.SetVisible(true);
-                layer.ExecuteJs("console.log('NUI_CDOM:hello');");
+                layer.ExecuteJs(
+                    "sui.request('cdom.echo',{x:7}).then(function(r){" +
+                    "console.log('NUI_CDOM:reply '+JSON.stringify(r));});");
                 var start = Environment.TickCount;
                 while (Environment.TickCount - start < 6000)
                 {
                     Sui.Pump();   // this domain's queue only; the owner pumps its own
-                    lock (got) { if (got.Count > 0) break; }
+                    lock (got)
+                    {
+                        if (got.Exists(e => e.IndexOf("NUI_CDOM:reply", StringComparison.Ordinal) >= 0))
+                            break;
+                    }
                     Thread.Sleep(25);
                 }
                 lock (got)
-                    return got.Count > 0 ? "ok:" + got[0] : "no events";
+                {
+                    string reply = got.Find(e => e.IndexOf("NUI_CDOM:reply", StringComparison.Ordinal) >= 0);
+                    return reply != null ? "ok:" + reply : "no reply";
+                }
             }
             finally
             {
                 layer.Message -= handler;
+                layer.Request -= requestHandler;
                 layer.Close();
             }
         }

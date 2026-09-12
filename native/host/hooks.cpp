@@ -50,6 +50,18 @@ std::map<UINT, std::pair<UINT, bool>> g_keysDown;
 // mis-firing subsequent clicks — capture transitions synthesize ups for these.
 bool g_mouseDown[3] = {false, false, false};
 
+// Forwarded key modifiers (bit 0 shift, bit 1 ctrl, bit 2 alt) — read on the game
+// thread when a key message is processed so CEF sees real modifier state
+// (Ctrl+C/V, Shift+arrows/selection, Alt combos). GetKeyState is reliable here
+// because the game thread is executing the window message.
+int CurrentModifiers() {
+    int mods = 0;
+    if (GetKeyState(VK_SHIFT) & 0x8000) mods |= 1;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= 2;
+    if (GetKeyState(VK_MENU) & 0x8000) mods |= 4;
+    return mods;
+}
+
 // Focus loss must not leave the page thinking a key is still held, and must not
 // leave the game with its controls disabled. Synthesize key-ups, then release.
 void ReleaseCapturedKeys() {
@@ -59,7 +71,7 @@ void ReleaseCapturedKeys() {
         for (const auto& kv : g_keysDown) {
             SendCommand("K" + std::to_string(id) + " 0 " + std::to_string(kv.first) + " " +
                         std::to_string(kv.second.first) + " " +
-                        (kv.second.second ? "1" : "0") + "\n");
+                        (kv.second.second ? "1" : "0") + " 0\n");   // modifiers: released -> 0
         }
     }
     g_keysDown.clear();
@@ -220,7 +232,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     UINT sc = (UINT)((lParam >> 16) & 0xff);
                     bool ext = (lParam >> 24) & 1;
                     SendCommand("K" + std::to_string(id) + " 1 " + std::to_string(vk) + " " +
-                                std::to_string(sc) + " " + (ext ? "1" : "0") + "\n");
+                                std::to_string(sc) + " " + (ext ? "1" : "0") + " " +
+                                std::to_string(CurrentModifiers()) + "\n");
                     g_keysDown[vk] = std::make_pair(sc, ext);
                     return 0;
                 }
@@ -238,7 +251,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     UINT sc = (UINT)((lParam >> 16) & 0xff);
                     bool ext = (lParam >> 24) & 1;
                     SendCommand("K" + std::to_string(id) + " 0 " + std::to_string(vk) + " " +
-                                std::to_string(sc) + " " + (ext ? "1" : "0") + "\n");
+                                std::to_string(sc) + " " + (ext ? "1" : "0") + " " +
+                                std::to_string(CurrentModifiers()) + "\n");
                     return 0;
                 }
             }

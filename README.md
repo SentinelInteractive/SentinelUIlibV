@@ -30,7 +30,7 @@ take the game down.**
 
 | Path | Contents |
 |---|---|
-| `docs/` | Research material (LemonUI/RAGENativeUI sources, WebUI example, natives.json) + `PLAN.md` (authoritative plan), `PHASE0.md` (decision record) |
+| `docs/` | Research material (LemonUI/RAGENativeUI sources, WebUI example, natives.json) + `PLAN.md` (authoritative plan), `PHASE0.md` (decision record), `PLUGIN-AUTHORING.md` (quickstart) |
 | `native/host/` | **ASI compositor**: MinHook swapchain hooks, WndProc, SHM frame consumer, renderer, `Sui*` exports |
 | `native/helper/` | **SentinelUI_Host.exe**: dedicated CEF process, transparent OSR, shared-memory frame publisher, self-test mode |
 | `native/hoststub/` | Fake host used by the managed load-path probe |
@@ -38,7 +38,7 @@ take the game down.**
 | `managed/SentinelUI.API/` | Managed bridge (net48), `Sui`/`SuiLayer` facade |
 | `managed/SentinelUI.Bootstrap/` | RPH plugin: loads host, per-frame pump, graceful shutdown, AppDomain assembly resolution |
 | `managed/tests/HostProbe/` | Console probe: managed⇄host contract (load, handshake, shutdown; incl. cross-AppDomain client) |
-| `samples/` | Working plugin examples: LSPDFR callout pack (`SuiSample/`) |
+| `samples/` | Working examples: LSPDFR callout pack (`SuiSample/`), browser dev shim (`browser-dev/`) |
 | `web/content/` | Demo pages (`p1_demo.html`, selftest page) + future `sui-*` toolkit |
 | `tools/` | `init-cef.ps1`, `build-{host,helper,harness,hoststub}.ps1`, `pack.ps1` (game deploy) |
 | `version.json` | Runtime version manifest |

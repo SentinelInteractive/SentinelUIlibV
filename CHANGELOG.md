@@ -4,6 +4,26 @@ All notable changes. Format loosely follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Added — 2026-09-12 (bridge v2: request/response, `window.sui`, key modifiers)
+- **`window.sui` protocol bridge injected into every page** — `sui.send(type, payload)`,
+  `sui.on(type, handler)` and `sui.request(type, payload[, timeoutMs])` (Promise). JS→C#
+  travels as a versioned JSON envelope (`{v,kind,type,id,payload}`) over the existing console
+  event channel; C#→JS is delivered through the injected helper. No native ABI change.
+- **Managed request API** — `SuiLayer.Request` / `Sui.RequestReceived` with
+  `SuiRequest.Reply` / `ReplyError`; delivered from `Sui.Pump()` on the game thread, so
+  handlers may call game natives. `SuiLayer.Send` now posts typed events through the bridge
+  (`Send(payload)` still works, type defaults to "message").
+- **Key modifiers forwarded** — the ASI reads Shift/Ctrl/Alt while processing the key message
+  and appends them to `K` commands; the helper maps them to CEF event flags, so Ctrl+C/V,
+  Shift+arrows/selection and Alt combos work in pages. Optional 6th `K` field keeps older
+  helpers compatible (no modifiers).
+- **Capture convenience** — `SuiLayer.ShowCaptured()` / `HideCaptured()` (show + focus +
+  capture / release + hide).
+- **DX** — `docs/PLUGIN-AUTHORING.md` quickstart; `samples/browser-dev/` (browser shim + demo
+  page to design without the game); HostProbe round-trip tests for owner and cross-AppDomain
+  request/reply.
+- API assemblies bumped to **0.4.0** (host export table stays v4; no runtime layout change).
+
 ### Fixed — 2026-09-11 (panel blink after GTA swapchain re-creation)
 - **Layers could stay invisible after GTA recreated its swapchain** (alt-tab, fullscreen /
   display transitions, some menus): resource init re-created the layer textures empty, but the

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Web.Script.Serialization;
 
 namespace SentinelUI
 {
@@ -15,6 +17,7 @@ namespace SentinelUI
     {
         private static readonly object Gate = new object();
         private static readonly List<SuiLayer> Layers = new List<SuiLayer>();
+        private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         private static bool _logReady;
         private static bool _attached;       // bridge attached in this AppDomain
         private static bool _isOwner;        // Bootstrap/probe: shutdown rights + legacy sink
@@ -34,6 +37,10 @@ namespace SentinelUI
         /// <summary>Raised for every event arriving from the UI (console/load/...).</summary>
         public static event Action<SuiMessage> MessageReceived;
 
+        /// <summary>Raised for every page request (<c>sui.request</c> from any layer).
+        /// Reply on the request object to resolve the page's promise.</summary>
+        public static event Action<SuiRequest> RequestReceived;
+
         internal static void DispatchRawEvent(string line)
         {
             // Line format (v3): "<nativeLayerId>|<kind>:<body>" (e.g. "1|console:NUI_...").
@@ -48,24 +55,91 @@ namespace SentinelUI
             string kind = colon < 0 ? rest : rest.Substring(0, colon);
             string body = colon < 0 ? string.Empty : rest.Substring(colon + 1);
 
-            SuiMessage msg = new SuiMessage { Type = kind, PayloadJson = body };
-            lock (Gate)
+            // Protocol envelope from window.sui (JSON after the "SUI:" prefix).
+            if (string.Equals(kind, "console", StringComparison.Ordinal) &&
+                body.StartsWith("SUI:", StringComparison.Ordinal))
             {
-                if (nativeId > 0)
-                {
-                    // Route to the owning layer. Unknown ids (e.g. layers owned by another
-                    // AppDomain) must NOT broadcast per-layer — only the global event fires.
-                    SuiLayer target = null;
-                    foreach (var l in Layers)
-                        if (l.NativeId == nativeId) { target = l; break; }
-                    target?.RaiseMessage(msg);
-                }
-                else
-                {
-                    foreach (var layer in Layers) layer.RaiseMessage(msg);
-                }
+                if (DispatchSuiEnvelope(nativeId, body.Substring(4))) return;
+                // Malformed envelope: fall through and treat it as a plain console message.
             }
+
+            RaiseRawMessage(nativeId, kind, body);
+        }
+
+        private static void RaiseRawMessage(int nativeId, string type, string payloadJson)
+        {
+            SuiMessage msg = new SuiMessage { Type = type, PayloadJson = payloadJson };
+            lock (Gate) { RouteMessageLocked(nativeId, msg); }
             MessageReceived?.Invoke(msg);
+        }
+
+        private static void RouteMessageLocked(int nativeId, SuiMessage msg)
+        {
+            if (nativeId > 0)
+            {
+                // Route to the owning layer. Unknown ids (e.g. layers owned by another
+                // AppDomain) must NOT broadcast per-layer — only the global event fires.
+                FindLayerLocked(nativeId)?.RaiseMessage(msg);
+            }
+            else
+            {
+                foreach (var layer in Layers) layer.RaiseMessage(msg);
+            }
+        }
+
+        private static SuiLayer FindLayerLocked(int nativeId)
+        {
+            foreach (var l in Layers)
+                if (l.NativeId == nativeId) return l;
+            return null;
+        }
+
+        /// <summary>Handles a window.sui envelope; returns false when the JSON is unusable
+        /// (the caller then treats the line as a plain console message).</summary>
+        private static bool DispatchSuiEnvelope(int nativeId, string json)
+        {
+            Dictionary<string, object> env;
+            try { env = Json.Deserialize<Dictionary<string, object>>(json); }
+            catch { return false; }
+            if (env == null) return false;
+            if (!env.TryGetValue("type", out var typeObj) || !(typeObj is string type) || type.Length == 0)
+                return false;
+
+            string kind = env.TryGetValue("kind", out var k) ? k as string : "evt";
+            string payloadJson = env.TryGetValue("payload", out var p) ? Serialize(p) : "null";
+
+            if (string.Equals(kind, "req", StringComparison.Ordinal))
+            {
+                long id = 0;
+                if (env.TryGetValue("id", out var idObj) && idObj != null)
+                    long.TryParse(Convert.ToString(idObj, CultureInfo.InvariantCulture), out id);
+
+                var request = new SuiRequest { Type = type, PayloadJson = payloadJson, Id = id };
+                SuiLayer target;
+                lock (Gate)
+                {
+                    target = nativeId > 0 ? FindLayerLocked(nativeId) : null;
+                    if (target != null) request.Layer = target;
+                }
+                target?.RaiseRequest(request);
+                RequestReceived?.Invoke(request);
+                return true;
+            }
+
+            RaiseRawMessage(nativeId, type, payloadJson);
+            return true;
+        }
+
+        internal static string Serialize(object value)
+        {
+            try { return Json.Serialize(value ?? null); }
+            catch { return "null"; }
+        }
+
+        internal static T Deserialize<T>(string json)
+        {
+            try { return Json.Deserialize<T>(json ?? "null"); }
+            catch { return default(T); }
         }
 
         /// <summary>Enables/disables input capture. While enabled the Bootstrap's pump
@@ -362,8 +436,13 @@ namespace SentinelUI
         /// <summary>The URL this layer was created from.</summary>
         public string Source { get; }
 
-        /// <summary>Raised for messages posted from this layer's page.</summary>
+        /// <summary>Raised for messages posted from this layer's page (<c>sui.send</c> or
+        /// legacy console lines).</summary>
         public event Action<SuiMessage> Message;
+
+        /// <summary>Raised for requests from this layer's page (<c>sui.request</c>).
+        /// Call <see cref="SuiRequest.Reply"/> to resolve the page's promise.</summary>
+        public event Action<SuiRequest> Request;
 
         internal SuiLayer(int nativeId, string source)
         {
@@ -378,6 +457,23 @@ namespace SentinelUI
 
         public void SetFocus(bool keyboard, bool mouse) =>
             NativeHost.CmdFocus(NativeId, keyboard, mouse);
+
+        /// <summary>Shows the layer, focuses it and enables input capture — the usual
+        /// "open an interactive UI" sequence in one call. Pair with <see cref="HideCaptured"/>
+        /// (or release capture yourself when the UI closes, e.g. on a page "close" event).</summary>
+        public void ShowCaptured()
+        {
+            SetVisible(true);
+            SetFocus(true, true);
+            Sui.SetCapture(true);
+        }
+
+        /// <summary>Releases input capture and hides the layer.</summary>
+        public void HideCaptured()
+        {
+            Sui.SetCapture(false);
+            SetVisible(false);
+        }
 
         /// <summary>Stacking order. Higher z composites above lower z (ties: creation order).</summary>
         public void SetZ(int z) => NativeHost.SetLayerZ(NativeId, z);
@@ -396,20 +492,22 @@ namespace SentinelUI
 
         public void ExecuteJs(string javascript) => NativeHost.ExecuteJs(NativeId, javascript);
 
-        public void Send(object payload)
+        /// <summary>Posts a protocol event to the page: <c>sui.on(type, handler)</c> receives
+        /// it. Default type is "message".</summary>
+        public void Send(object payload) => Send("message", payload);
+
+        /// <summary>Posts a typed protocol event to the page.</summary>
+        public void Send(string type, object payload)
         {
-            // JS postMessage bridge: the page receives the JSON envelope on window.message.
-            string json;
-            try
+            var env = new Dictionary<string, object>
             {
-                json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(payload);
-            }
-            catch
-            {
-                json = null;
-            }
-            if (json != null)
-                NativeHost.ExecuteJs(NativeId, "window.postMessage(" + json + ", '*')");
+                { "v", 1 },
+                { "kind", "evt" },
+                { "type", type ?? "message" },
+                { "payload", payload },
+            };
+            string json = Sui.Serialize(env);
+            NativeHost.ExecuteJs(NativeId, "window.sui&&window.sui._deliver(" + json + ")");
         }
 
         public void Close()
@@ -423,6 +521,63 @@ namespace SentinelUI
             message.Layer = this;
             Message?.Invoke(message);
         }
+
+        internal void RaiseRequest(SuiRequest request)
+        {
+            request.Layer = this;
+            Request?.Invoke(request);
+        }
+
+        internal void ReplyRequest(SuiRequest request, object payload, bool ok)
+        {
+            var env = new Dictionary<string, object>
+            {
+                { "v", 1 },
+                { "kind", "res" },
+                { "type", request.Type },
+                { "id", request.Id },
+                { "ok", ok },
+                { "payload", payload },
+            };
+            string json = Sui.Serialize(env);
+            NativeHost.ExecuteJs(NativeId, "window.sui&&window.sui._deliver(" + json + ")");
+        }
+    }
+
+    /// <summary>A request from a page (<c>sui.request(type, payload)</c>). Reply on the game
+    /// thread to resolve the page's promise; the handler runs from <c>Sui.Pump()</c>, so game
+    /// natives are safe to call here.</summary>
+    public sealed class SuiRequest
+    {
+        public SuiLayer Layer { get; internal set; }
+        public string Type { get; internal set; }
+        public string PayloadJson { get; internal set; }
+        public long Id { get; internal set; }
+
+        /// <summary>Deserializes <see cref="PayloadJson"/> into <typeparamref name="T"/>.</summary>
+        public T Payload<T>() => Sui.Deserialize<T>(PayloadJson);
+
+        /// <summary>Resolves the page's promise with <paramref name="payload"/>.</summary>
+        public void Reply(object payload)
+        {
+            if (Layer == null)
+            {
+                SuiLog.Warn($"SuiRequest '{Type}' has no owning layer; reply dropped.");
+                return;
+            }
+            Layer.ReplyRequest(this, payload, true);
+        }
+
+        /// <summary>Rejects the page's promise (the page's <c>catch</c> receives the message).</summary>
+        public void ReplyError(string message)
+        {
+            if (Layer == null)
+            {
+                SuiLog.Warn($"SuiRequest '{Type}' has no owning layer; error reply dropped.");
+                return;
+            }
+            Layer.ReplyRequest(this, message ?? "error", false);
+        }
     }
 
     /// <summary>A message received from a page (or sent to it via <see cref="SuiLayer.Send"/>).</summary>
@@ -431,5 +586,8 @@ namespace SentinelUI
         public SuiLayer Layer { get; internal set; }
         public string Type { get; internal set; }
         public string PayloadJson { get; internal set; }
+
+        /// <summary>Deserializes <see cref="PayloadJson"/> into <typeparamref name="T"/>.</summary>
+        public T Payload<T>() => Sui.Deserialize<T>(PayloadJson);
     }
 }

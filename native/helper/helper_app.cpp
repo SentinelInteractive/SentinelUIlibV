@@ -72,6 +72,9 @@ void LayerClient::OnLoadingStateChange(CefRefPtr<CefBrowser>, bool isLoading, bo
         loadRetries_ = 0;          // successful load clears the retry budget
         retryPending_ = false;
         // Inject the software cursor once the page finished loading.
+        // Protocol bridge first (pages' scripts may use window.sui immediately),
+        // then the cursor/badge, then the current capture state.
+        QueueJs(kSuiJs);
         QueueJs(kCursorJs);
         QueueJs(captureOn_ ? kCaptureStateJsOn : kCaptureStateJsOff);
     }
@@ -167,6 +170,44 @@ void LayerClient::ExecuteJs(const std::string& javascript) {
     browser_->GetMainFrame()->ExecuteJavaScript(javascript, "sentinelui://", 0);
 }
 
+// Protocol bridge injected into every page: window.sui with
+//   sui.send(type, payload)           – fire-and-forget event to C#/plugins
+//   sui.on(type, handler)             – receive events/replies (returns unsubscribe)
+//   sui.request(type, payload[, ms])  – Promise request -> SuiLayer.Request/Reply
+// JS->C# travels as console lines prefixed "SUI:" (JSON envelope v1); C# -> JS
+// is delivered through window.sui._deliver (ExecuteJs), which also re-posts the
+// envelope on window.postMessage for pages that prefer raw listeners.
+const char* kSuiJs =
+    "(function(){"
+    "if(window.sui&&window.sui._v===1)return;"
+    "var seq=0,pending={},listeners={};"
+    "function post(m){try{console.log('SUI:'+JSON.stringify(m));}catch(e){}}"
+    "function emit(type,payload,env){"
+    "var ls=listeners[type]||[];for(var i=0;i<ls.length;i++){try{ls[i](payload,env);}catch(e){}}"
+    "var all=listeners['*']||[];for(var j=0;j<all.length;j++){try{all[j](payload,env);}catch(e){}}"
+    "}"
+    "function deliver(env){"
+    "try{window.postMessage(env,'*');}catch(e){}"
+    "if(!env)return;"
+    "if(env.kind==='res'&&env.id!=null){"
+    "var p=pending[env.id];if(!p)return;delete pending[env.id];"
+    "if(env.ok===false)p.reject(env.payload);else p.resolve(env.payload);"
+    "return;"
+    "}"
+    "if(env.type)emit(env.type,env.payload,env);"
+    "}"
+    "window.sui={_v:1,"
+    "send:function(type,payload){post({v:1,kind:'evt',type:String(type),payload:payload});},"
+    "on:function(type,fn){var t=String(type);(listeners[t]=listeners[t]||[]).push(fn);"
+    "return function(){var a=listeners[t];if(!a)return;var i=a.indexOf(fn);if(i>=0)a.splice(i,1);};},"
+    "request:function(type,payload,timeoutMs){return new Promise(function(resolve,reject){"
+    "var id=++seq;pending[id]={resolve:resolve,reject:reject};"
+    "post({v:1,kind:'req',type:String(type),id:id,payload:payload});"
+    "if(timeoutMs)setTimeout(function(){if(pending[id]){delete pending[id];"
+    "reject('sui request timeout: '+type);}},timeoutMs);});},"
+    "_deliver:deliver};"
+    "})();";
+
 // Software cursor: GTA V hides the OS cursor and OSR draws none — the page renders
 // its own arrow. It is only visible while input capture is on (window.__suiSetCapture),
 // uses a plain white/black arrow with a drop shadow instead of the old
@@ -239,13 +280,19 @@ void LayerClient::Tick() {
     browser_->GetMainFrame()->LoadURL(retryUrl_);
 }
 
-void LayerClient::DispatchKey(bool down, int vk, int scancode, bool extended) {
+void LayerClient::DispatchKey(bool down, int vk, int scancode, bool extended, int modifiers) {
     if (!browser_) return;
     CefKeyEvent ev;
     ev.type = down ? KEYEVENT_RAWKEYDOWN : KEYEVENT_KEYUP;
     ev.windows_key_code = vk;
     ev.native_key_code = (extended ? 0x100 : 0) | (scancode << 16);
     ev.is_system_key = false;
+    // Host modifier bits (1 shift, 2 ctrl, 4 alt) -> CEF event flags.
+    int cefMods = 0;
+    if (modifiers & 1) cefMods |= EVENTFLAG_SHIFT_DOWN;
+    if (modifiers & 2) cefMods |= EVENTFLAG_CONTROL_DOWN;
+    if (modifiers & 4) cefMods |= EVENTFLAG_ALT_DOWN;
+    ev.modifiers = cefMods;
     browser_->GetHost()->SendKeyEvent(ev);
 }
 
@@ -410,11 +457,12 @@ void LayerManager::SetViewportAll(int width, int height) {
     });
 }
 
-void LayerManager::DispatchKey(int layerId, bool down, int vk, int scancode, bool extended) {
+void LayerManager::DispatchKey(int layerId, bool down, int vk, int scancode, bool extended,
+                               int modifiers) {
     std::lock_guard<std::mutex> lock(opsMutex_);
-    ops_.push_back([this, layerId, down, vk, scancode, extended]() {
+    ops_.push_back([this, layerId, down, vk, scancode, extended, modifiers]() {
         auto it = layers_.find(layerId);
-        if (it != layers_.end()) it->second->DispatchKey(down, vk, scancode, extended);
+        if (it != layers_.end()) it->second->DispatchKey(down, vk, scancode, extended, modifiers);
     });
 }
 
@@ -608,10 +656,10 @@ void OnIpcCommand(const std::string& line) {
             if (sscanf_s(line.c_str() + 1, "%d %d", &w, &h) == 2) LM().SetViewportAll(w, h);
             break;
         }
-        case 'K': {  // K<id> <down> <vk> <sc> <ext>
-            int d = 0, vk = 0, sc = 0, ext = 0;
-            if (sscanf_s(line.c_str() + 1, "%d %d %d %d %d", &id, &d, &vk, &sc, &ext) == 5)
-                LM().DispatchKey(id, d != 0, vk, sc, ext != 0);
+        case 'K': {  // K<id> <down> <vk> <sc> <ext> [mods]
+            int d = 0, vk = 0, sc = 0, ext = 0, mods = 0;
+            int n = sscanf_s(line.c_str() + 1, "%d %d %d %d %d %d", &id, &d, &vk, &sc, &ext, &mods);
+            if (n >= 5) LM().DispatchKey(id, d != 0, vk, sc, ext != 0, mods);
             break;
         }
         case 'U': {  // U<id> <char>

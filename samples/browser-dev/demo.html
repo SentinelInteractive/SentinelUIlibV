@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SentinelUI browser dev shim</title>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #e6edf3;
+           max-width: 720px; margin: 40px auto; padding: 0 16px; }
+    h1 { font-size: 18px; letter-spacing: .08em; text-transform: uppercase; color: #6ec1ff; }
+    button { margin: 6px 8px 6px 0; padding: 8px 14px; border: 0; border-radius: 5px;
+             background: #1f6feb; color: #fff; font-size: 14px; cursor: pointer; }
+    pre { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px;
+          min-height: 60px; font-size: 12px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>SentinelUI — browser dev shim</h1>
+  <p>Same page code you ship in-game; the shim stands in for the runtime.</p>
+
+  <button id="echo">sui.request('demo.echo')</button>
+  <button id="send">sui.send('demo.event')</button>
+  <button id="dev">sui.request('demo.custom') (suiDev reply)</button>
+  <pre id="out">—</pre>
+
+  <script src="sui-bridge.js"></script>
+  <script>
+    // Optional per-type fake replies, used only in the browser.
+    window.suiDev = {
+      'demo.custom': function (payload) {
+        return { custom: true, got: payload, at: new Date().toLocaleTimeString() };
+      }
+    };
+
+    var out = document.getElementById('out');
+    function show(label, value) {
+      out.textContent = label + '\n' + JSON.stringify(value, null, 2);
+      console.log(label, value);
+    }
+
+    sui.on('demo.pushed', function (payload) {
+      show('demo.pushed event received', payload);
+    });
+
+    document.getElementById('echo').onclick = async function () {
+      show('demo.echo resolved', await sui.request('demo.echo', { n: 42 }));
+    };
+
+    document.getElementById('send').onclick = function () {
+      sui.send('demo.event', { hello: 'host' });
+      show('demo.event sent', '(fire-and-forget)');
+    };
+
+    document.getElementById('dev').onclick = async function () {
+      show('demo.custom resolved', await sui.request('demo.custom', { q: 'x' }));
+    };
+
+    // Simulate a host push in the browser via the shim helper.
+    sui.send('demo.ready', { v: 1 });
+    setTimeout(function () { sui._emit('demo.pushed', { from: 'fake host' }); }, 500);
+  </script>
+</body>
+</html>

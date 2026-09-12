@@ -13,3 +13,7 @@ selftest_page.html             helper self-test page (file:// baseline, tests on
 A `sui-*` component library (custom elements, theme, gallery) is **explicitly out of
 scope** — it would make the renderer opinionated and duplicate plain web tech
 (issue #5, closed 2026-09-11). Component libraries belong in userland.
+
+The runtime *does* inject `window.sui` into every page — a ~40-line protocol helper
+(`send` / `on` / `request`) that carries the versioned envelope between the page and the
+plugin. That is plumbing, not a component library; see `docs/PLUGIN-AUTHORING.md`.

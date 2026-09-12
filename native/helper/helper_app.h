@@ -40,6 +40,8 @@ namespace sui_helper {
 
 // Software cursor injected into pages (defined in helper_app.cpp).
 extern const char* kCursorJs;
+// Protocol bridge (`window.sui`: send/on/request) injected into every page.
+extern const char* kSuiJs;
 // Capture badge state toggles (defined in helper_app.cpp).
 extern const char* kCaptureStateJsOn;
 extern const char* kCaptureStateJsOff;
@@ -165,7 +167,7 @@ public:
     void SetCaptureIndicator(bool on);
     void SetFocused(bool keyboard, bool mouse);
     void SetViewport(int width, int height);
-    void DispatchKey(bool down, int vk, int scancode, bool extended);
+    void DispatchKey(bool down, int vk, int scancode, bool extended, int modifiers);
     void DispatchChar(int codePoint);
     void DispatchMouseMove(int x, int y);
     void DispatchMouseButton(int button, bool down, int x, int y);
@@ -270,7 +272,7 @@ public:
     void Navigate(int layerId, const std::string& urlUtf8);
     void Reload(int layerId);
     void SetViewportAll(int width, int height);   // global viewport sync
-    void DispatchKey(int layerId, bool down, int vk, int scancode, bool extended);
+    void DispatchKey(int layerId, bool down, int vk, int scancode, bool extended, int modifiers);
     void DispatchChar(int layerId, int codePoint);
     void DispatchMouseMove(int layerId, int x, int y);
     void DispatchMouseButton(int layerId, int button, bool down, int x, int y);
