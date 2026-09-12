@@ -98,6 +98,13 @@ Hard-won knowledge from building SentinelUI (2026-09-08). Every item below was
   through directly inverts every click (CEF sees up-before-down); buttons then fire only on every
   second click. Symptom: "buttons are buggy, sometimes they work". Fixed 2026-09-11. Also
   synthesize button-ups when capture ends (focus loss/F10) — a stuck held button blocks later clicks.
+- **Custom schemes are scriptable but not fetchable.** `sentinelui://` pages can load scripts,
+  styles, images and iframes, but `fetch()` and XHR to the scheme fail with
+  `URL scheme "sentinelui" is not supported` (Chromium restriction, not CSP). For SPA-style
+  routers either bundle screen fragments into a JS file loaded with `<script src>` or keep all
+  screens in one document. Related: the scheme CSP needed `connect-src 'self'` (was `'none'`)
+  before any fetch was even attempted; a blocked fetch shows a CSP console error, an unsupported
+  scheme shows the URL scheme error.
 - CEF's own logs (`debug.log`/`chrome_debug.log`) and console dispatch tell you a lot — enable
   them while diagnosing, disable in release.
 

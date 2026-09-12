@@ -4,6 +4,14 @@ All notable changes. Format loosely follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Fixed — 2026-09-12 (custom scheme content loading)
+- Scheme CSP now sends `connect-src 'self'` (was `'none'`), so pages served through
+  `sentinelui://` are at least allowed to attempt same-origin requests.
+- Documented the real limitation found while porting PoliceTerminalPlus: **Chromium does not
+  support Fetch/XHR for custom schemes** (`URL scheme "sentinelui" is not supported`). Pages
+  must load dynamic content with `<script src>`, `<iframe>` or a bundled fragment script; see
+  `docs/PLUGIN-AUTHORING.md` and `docs/LESSONS-LEARNED.md` section 3.
+
 ### Added — 2026-09-12 (bridge v2: request/response, `window.sui`, key modifiers)
 - **`window.sui` protocol bridge injected into every page** — `sui.send(type, payload)`,
   `sui.on(type, handler)` and `sui.request(type, payload[, timeoutMs])` (Promise). JS→C#

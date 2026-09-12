@@ -100,6 +100,11 @@ helps when debugging:
 
 - `sentinelui://<name>/<path>` is local-only, traversal-safe, `no-store`, `script-src 'self'`
   (ship JS/CSS as files, no inline `<script>`).
+- **Chromium does not support Fetch/XHR for custom schemes.** `fetch("views/login.html")` fails in
+  game with `URL scheme "sentinelui" is not supported`. That is a browser rule, not a CSP setting.
+  Load dynamic content with `<script src>`, `<iframe>` or `<link>`, or bundle fragments into a JS
+  file (see the PoliceTerminalPlus port for the pattern). The scheme CSP allows `connect-src 'self'`,
+  which only covers same-origin http(s) fetches from a page.
 - `CreateLayerFromHtml(html, baseUrl?)` is for small self-contained pages (segments travel
   through the pipe): a `data:` URL is used, and `baseUrl` is injected as `<base href>` so
   relative files can resolve against a registered root.
