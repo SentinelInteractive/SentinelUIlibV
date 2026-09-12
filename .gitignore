@@ -37,3 +37,4 @@ native/harness/*.yuv
 native/harness/harness_page.html
 native/harness/harness_trace.txt
 native/harness/debug.log
+.playwright-mcp/
