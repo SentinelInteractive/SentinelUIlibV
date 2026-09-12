@@ -11,6 +11,11 @@ The RPH plugin only attaches to that loaded module (it never `LoadLibrary`s it);
 loads the host, SentinelUI degrades to a clean no-op instead of crashing. Why it has to be this
 way: `docs/LESSONS-LEARNED.md` §2 (2026-09-11 field test).
 
+**Real-world example:** [PoliceTerminalPlus](https://github.com/maminka19482/PoliceTerminalPlus)
+is an LSPDFR terminal ported to SentinelUI: twelve HTML screens recreated from design mockups,
+`window.sui` requests for LSPDFR persona and vehicle data, and one captured layer opened from
+the `policeterminal` console command.
+
 ```
 WEB LAYER      <sui-panel> <sui-button> <sui-list> ... plain HTML/CSS/JS pages
 RENDER PROCESS SentinelUI_Host.exe   (dedicated CEF process — transparent OSR → shared memory)
