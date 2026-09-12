@@ -24,7 +24,11 @@ Legend: ✅ verified (offline HostProbe and/or the 2026-09-10 in-game sessions) 
 
 ## Field findings from the in-game pass (all fixed)
 
-1. **`ERR_UNKNOWN_URL_SCHEME` on first in-game navigation** — CEF child-process scheme
+**2026-09-12 (operator-verified in-game):** click dispatch fixed (`SendMouseClickEvent`'s
+`mouseUp` param was inverted — buttons fired every other click), capture badge + rebuilt
+cursor verified, F9/F10/F11 no longer forwarded to pages, and the swapchain-recreation blink
+fixed (resources re-init now force-re-uploads every layer's resident frame in the same
+Present). LSPDFR sample callout: 5/5 button events delivered across domains.1. **`ERR_UNKNOWN_URL_SCHEME` on first in-game navigation** — CEF child-process scheme
    registration raced the boot navigation under game-boot load. Fixed: register right
    after `CefInitialize`, settle window, bounded retry, per-process
    `scheme_registration.log`.

@@ -89,8 +89,9 @@ BOOTSTRAP       SentinelUI.Bootstrap.dll (RPH plugin, <game>\Plugins\). Attach-o
   rendering, ResizeBuffers/device-lost recovery, minidump + structured logging, version handshake.
 - **P3 Managed API + samples**: API assembly complete, Bootstrap console commands, RPH sample,
   LSPDFR callout sample (case screen with live game data via natives from pump thread), packaging,
-  NuGet (API DLL only). In progress 2026-09-11: cross-domain clients, inline HTML, version handshake
-  landed (API 0.3/host v4); samples + NuGet pending.
+  NuGet (API DLL only; **deferred — publishing step, not needed internally**). In progress
+  2026-09-11: cross-domain clients, inline HTML, version handshake landed (API 0.3/host v4).
+  2026-09-12: LSPDFR callout sample in-repo (`samples/SuiSample/`); samples + docs pending.
 - **P4 Web toolkit**: NOT PLANNED — removed 2026-09-11 (issue #5 closed).
 - **P5 Hardening & release**: 30-min RSS test (<400 MB delta), layer budget (<=3 visible), crash-pack
   triage runbook, version.json matrix (RPH 1.124->1.131+), CEF notices, release zip, wiki.

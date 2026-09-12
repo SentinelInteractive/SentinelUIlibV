@@ -37,7 +37,8 @@ take the game down.**
 | `native/harness/` | OSR validation harness (Phase-0 gate, still the regression baseline) |
 | `managed/SentinelUI.API/` | Managed bridge (net48), `Sui`/`SuiLayer` facade |
 | `managed/SentinelUI.Bootstrap/` | RPH plugin: loads host, per-frame pump, graceful shutdown, AppDomain assembly resolution |
-| `managed/tests/HostProbe/` | Console probe: managed⇄host contract (load, handshake, shutdown) |
+| `managed/tests/HostProbe/` | Console probe: managed⇄host contract (load, handshake, shutdown; incl. cross-AppDomain client) |
+| `samples/` | Working plugin examples: LSPDFR callout pack (`SuiSample/`) |
 | `web/content/` | Demo pages (`p1_demo.html`, selftest page) + future `sui-*` toolkit |
 | `tools/` | `init-cef.ps1`, `build-{host,helper,harness,hoststub}.ps1`, `pack.ps1` (game deploy) |
 | `version.json` | Runtime version manifest |
