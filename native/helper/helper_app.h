@@ -17,7 +17,9 @@
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_frame.h"
 #include "include/cef_render_handler.h"
+#include "include/cef_v8.h"
 #include "include/cef_command_line.h"
 #include "include/internal/cef_types_wrappers.h"
 
@@ -215,9 +217,11 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// CefApp (all processes) + browser-process handler (scheme registration).
+// CefApp (all processes) + browser/render process handlers.
 // ---------------------------------------------------------------------------
-class SuiHelperApp : public CefApp, public CefBrowserProcessHandler {
+class SuiHelperApp : public CefApp,
+                     public CefBrowserProcessHandler,
+                     public CefRenderProcessHandler {
 public:
     // CefApp
     void OnBeforeCommandLineProcessing(const CefString&,
@@ -238,6 +242,18 @@ public:
     }
 
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
+    CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override { return this; }
+
+    // Renderer process: inject the window.sui bridge into EVERY frame context
+    // before any page script runs. The browser-process post-load injection alone
+    // raced page scripts (inline <script>s executed while window.sui was absent —
+    // caught by the HostProbe request test 2026-09-12).
+    void OnContextCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+                          CefRefPtr<CefV8Context> context) override {
+        (void)browser;
+        (void)context;
+        if (frame && frame->IsMain()) frame->ExecuteJavaScript(kSuiJs, "sui://bridge", 0);
+    }
 
     // Browser process: register the sentinelui:// scheme handler factory on
     // the IO thread (must precede any layer navigation).
