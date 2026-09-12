@@ -141,9 +141,11 @@ std::string MimeForExtension(const std::wstring& path) {
 }
 
 // CSP applied to every HTML response (issue #2: CSP-tight content).
+// connect-src 'self' is required for pages that fetch sibling files (the UI router
+// loads screen fragments with fetch; 2026-09-12 in-game fix).
 const char kContentCsp[] =
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; font-src 'self'; connect-src 'none'; "
+    "img-src 'self' data:; font-src 'self'; connect-src 'self'; "
     "object-src 'none'; frame-src 'none'; form-action 'none'";
 
 }  // namespace
