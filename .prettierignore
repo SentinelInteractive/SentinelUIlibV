@@ -1,0 +1,7 @@
+assets/
+internal/
+native/third_party/
+tools/stress-results/
+**/bin/
+**/obj/
+**/build/

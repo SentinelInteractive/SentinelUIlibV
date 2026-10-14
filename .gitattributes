@@ -1,0 +1,4 @@
+# One line-ending policy for the whole repository: LF in, LF out. Git's own
+# core.autocrlf setting is ignored for these paths. After changing this file,
+# normalize existing blobs once with: git add --renormalize .
+* text=auto eol=lf
