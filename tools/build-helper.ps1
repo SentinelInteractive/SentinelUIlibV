@@ -1,4 +1,4 @@
-# build-helper.ps1 — configure + build SentinelUI_Host.exe (dedicated CEF process).
+# build-helper.ps1: configure + build SentinelUI_Host.exe (dedicated CEF process).
 # Mirrors tools/build-host.ps1 (vswhere -> vcvars64 -> Ninja + MSVC).
 
 param(

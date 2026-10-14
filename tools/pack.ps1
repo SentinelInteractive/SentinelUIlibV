@@ -1,6 +1,6 @@
-# pack.ps1 — assemble and deploy the SentinelUI runtime into a GTA V install.
+# pack.ps1: assemble and deploy the SentinelUI runtime into a GTA V install.
 #
-# Canonical layout (ASI + CEF runtime live at the GAME ROOT — ASI loaders and the
+# Canonical layout (ASI + CEF runtime live at the GAME ROOT: ASI loaders and the
 # CEF delay-load helper both resolve from there; only the content cache/logs live
 # in a subfolder, resolved by absolute path in host code).
 #
@@ -11,13 +11,13 @@
 # Do not relocate without replacing the Present hook with an RPH-native path.
 #
 #   <game>\                          (GTA V root)
-#     SentinelUI.asi                 ASI compositor — hooks Present/WndProc (SHV-loaded)
+#     SentinelUI.asi                 ASI compositor: hooks Present/WndProc (SHV-loaded)
 #     SentinelUI_Host.exe            dedicated CEF process (spawned by the ASI)
 #     libcef.dll *.pak icudtl.dat ... full CEF runtime (flat, next to the ASI)
 #     locales\                       CEF locale packs
 #     SentinelUI.API.dll             managed bridge (also copied to Plugins\)
 #     SentinelUI\
-#       content\p1_demo.html         P1 gate demo (+ selftest_page.html)
+#       content\p1_demo.html         overlay demo page (+ selftest_page.html)
 #       logs\                        host + helper + API logs (no RPH spam)
 #       cache\                       CEF profile/cache
 #       LICENSE_CEF.txt
@@ -29,8 +29,6 @@
 
 param(
     [string]$GameDir = "D:\SteamLibrary\steamapps\common\Grand Theft Auto V",
-    [ValidateSet("Debug", "Release")]
-    [string]$HostConfig = "Release",
     [ValidateSet("Debug", "Release")]
     [string]$ManagedConfig = "Debug"
 )
@@ -53,28 +51,28 @@ $pluginsDir = Join-Path $GameDir "Plugins"
 
 Write-Host "[pack] Deploying to $GameDir" -ForegroundColor Cyan
 
-# ---- failure-safe pre-step: remove only files we no longer ship or that block the
-#      copy (payload copies below overwrite everything else; no delete-then-fail). ----
+# Failure-safe pre-step: remove only files we no longer ship or that block the
+# copy (payload copies below overwrite everything else; no delete-then-fail).
 $stale = Join-Path $GameDir "SentinelUI_Worker.exe"
 if (Test-Path $stale) { Remove-Item -Force $stale }
-# Refresh content only - logs/cache belong to past sessions, and deleting the
+# Refresh content only: logs/cache belong to past sessions, and deleting the
 # whole folder used to abort mid-way when the game still held the CEF cache open.
 $contentDir = Join-Path $suiDir "content"
 if (Test-Path $contentDir) { Remove-Item -Recurse -Force $contentDir }
 New-Item -ItemType Directory -Force -Path $contentDir, (Join-Path $suiDir "cache"), (Join-Path $suiDir "logs") | Out-Null
 Write-Host "[pack] copy phase (overwrites existing root files)..." -ForegroundColor DarkGray
 
-# ---- host module (ASI compositor) — MUST be at the root for SHV (see header) ----
+# Host module (ASI compositor): must be at the root for SHV (see header).
 Copy-Item (Join-Path $repo "native\host\build\SentinelUI.asi") $GameDir
 
-# ---- helper process + full CEF runtime (flat at game root) ----
+# Helper process + full CEF runtime (flat at game root).
 $helperOut = Join-Path $repo "native\helper\build\Release"
 if (-not (Test-Path (Join-Path $helperOut "SentinelUI_Host.exe"))) { throw "Helper not built (run tools\build-helper.ps1)." }
 
-# ---- guard: the failed 2026-09-11 subfolder experiment left a second runtime in
-#      $suiDir. Bootstrap.ResolveHostPath probes <game>\SentinelUI\SentinelUI.asi
-#      FIRST, so a stale copy there would be loaded next to the SHV-loaded root
-#      ASI (double hooks/helper). Remove any leftovers before deploying. ----
+# Guard: the failed 2026-09-11 subfolder experiment left a second runtime in
+# $suiDir. Bootstrap.ResolveHostPath probes <game>\SentinelUI\SentinelUI.asi
+# first, so a stale copy there would be loaded next to the SHV-loaded root ASI
+# (double hooks/helper). Remove any leftovers before deploying.
 if (Test-Path (Join-Path $suiDir "SentinelUI.asi")) {
     Write-Host "[pack] removing stale subfolder runtime (experiment leftovers in $suiDir)" -ForegroundColor Yellow
     foreach ($name in @("SentinelUI.asi", "SentinelUI_Host.exe")) {
@@ -89,16 +87,18 @@ if (Test-Path (Join-Path $suiDir "SentinelUI.asi")) {
 Get-ChildItem $helperOut | Where-Object { $_.Name -notin @("SentinelUI.lib", "SentinelUI.exp", "SentinelUI.pdb") } |
     Copy-Item -Destination $GameDir -Recurse -Force
 
-# ---- content + license ----
+# Content + license.
 Copy-Item (Join-Path $repo "web\content\p1_demo.html") (Join-Path $suiDir "content")
 Copy-Item (Join-Path $repo "web\content\p1_demo.js") (Join-Path $suiDir "content")
+Copy-Item (Join-Path $repo "web\content\badge.html") (Join-Path $suiDir "content")
+Copy-Item (Join-Path $repo "web\content\badge.js") (Join-Path $suiDir "content")
 Copy-Item (Join-Path $repo "web\content\demo_hud.html") (Join-Path $suiDir "content")
 Copy-Item (Join-Path $repo "web\content\demo_hud.js") (Join-Path $suiDir "content")
 Copy-Item (Join-Path $repo "web\content\selftest_page.html") (Join-Path $suiDir "content")
 $cefLicense = Join-Path $cefRoot "LICENSE.txt"
 if (Test-Path $cefLicense) { Copy-Item $cefLicense (Join-Path $suiDir "LICENSE_CEF.txt") } else { Write-Host "[pack] WARN cef LICENSE.txt not found" -ForegroundColor Yellow }
 
-# ---- managed plugin (RPH auto-load) ----
+# Managed plugin (RPH auto-load).
 $managedOut = Join-Path $repo "managed\SentinelUI.Bootstrap\bin\$ManagedConfig"
 foreach ($file in @("SentinelUI.Bootstrap.dll", "SentinelUI.API.dll")) {
     $src = Join-Path $managedOut $file

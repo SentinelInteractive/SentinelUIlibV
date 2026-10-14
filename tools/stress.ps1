@@ -1,4 +1,4 @@
-# stress.ps1 — SentinelUI session stress harness (issue #4 acceptance matrix).
+# stress.ps1: SentinelUI session stress harness (acceptance matrix).
 #
 # Runs N full game sessions unattended: launch -> wait for host -> optional
 # scenario -> sample RSS/handles -> graceful quit -> orphan/dump/log checks.
@@ -49,10 +49,6 @@ $HostLogDir = Join-Path $GameDir "SentinelUI\logs"
 $ResultsDir = Join-Path $PSScriptRoot "stress-results"
 $script:LastCefIds = @()
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 function Get-HostLogPath {
     Join-Path $HostLogDir ("sentinelui_host_{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 }
@@ -61,7 +57,7 @@ function Get-FileLengthSafe {
     param([string]$Path)
     try {
         if (Test-Path -LiteralPath $Path) { return (Get-Item -LiteralPath $Path).Length }
-    } catch { }
+    } catch { Write-Verbose "Get-FileLengthSafe: cannot read length yet: $_" }
     return [long]0
 }
 
@@ -104,6 +100,7 @@ function Wait-LogDelta {
         if ($text -match $Pattern) { return $text }
         Start-Sleep -Seconds 1
     }
+    Write-Verbose "timed out after ${TimeoutSeconds}s waiting for: $What"
     return $null
 }
 
@@ -203,9 +200,7 @@ function Export-Results {
     return @{ Csv = $csv; Json = $json }
 }
 
-# ---------------------------------------------------------------------------
 # Preflight
-# ---------------------------------------------------------------------------
 
 $gameExe = Join-Path $GameDir "GTA5.exe"
 $hostAsi = Join-Path $GameDir "SentinelUI.asi"
@@ -268,9 +263,7 @@ if ($DryRun) {
     exit 0
 }
 
-# ---------------------------------------------------------------------------
 # Session loop
-# ---------------------------------------------------------------------------
 
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $sessionResults = New-Object System.Collections.Generic.List[object]
@@ -315,7 +308,7 @@ for ($index = 1; $index -le $Sessions; $index++) {
         # 1. Launch. RPH is the default. ScriptHookV loads SentinelUI.asi from the
         # game root at process start (required: our Present hook must precede
         # RPH's); Bootstrap then attaches and owns shutdown. Launching without RPH
-        # yields a headless host with no Bootstrap — session invalid unless
+        # yields a headless host with no Bootstrap; session invalid unless
         # -AllowNoBootstrap opts into overlay-only checks.
         switch ($Launch) {
             "RPH" {
@@ -387,7 +380,7 @@ for ($index = 1; $index -le $Sessions; $index++) {
         if (-not $SkipStoryModeEnter) {
             Start-Sleep -Seconds 3
             try {
-                Focus-Gta -Process $gta
+                Set-GtaForeground -Process $gta
                 Send-Tap -Vk 0x0D
                 Start-Sleep -Seconds 3
                 Send-Tap -Vk 0x0D
@@ -522,7 +515,7 @@ for ($index = 1; $index -le $Sessions; $index++) {
                 Close-GameWindow -Process $g | Out-Null
                 Start-Sleep -Seconds 5
             }
-        } catch { }
+        } catch { Write-Verbose "cleanup close failed: $_" }
     }
 
     $result.Notes = ($notes -join "; ")
@@ -544,9 +537,7 @@ for ($index = 1; $index -le $Sessions; $index++) {
     }
 }
 
-# ---------------------------------------------------------------------------
 # Summary
-# ---------------------------------------------------------------------------
 
 $exported = Export-Results -Sessions $sessionResults -Stamp $stamp
 $passed = @($sessionResults | Where-Object { $_.Pass }).Count

@@ -1,0 +1,53 @@
+name: Build native
+description: Fetch MinHook, restore or download CEF, then build the ASI and the CEF helper.
+
+runs:
+  using: composite
+  steps:
+    - name: Restore CEF cache
+      uses: actions/cache@v6
+      with:
+        path: |
+          native/third_party/cef
+          native/third_party/_downloads
+        key: cef-${{ runner.os }}-${{ hashFiles('version.json') }}
+
+    - name: Fetch MinHook
+      shell: pwsh
+      run: |
+        $sha = "8af6b4acae5a9388fd742b56fa79ece89d96f823"
+        $thirdParty = Join-Path $env:GITHUB_WORKSPACE "native/third_party"
+        $dest = Join-Path $thirdParty "minhook"
+        if (-not (Test-Path (Join-Path $dest "src/hook.c"))) {
+            $tarball = Join-Path $env:RUNNER_TEMP "minhook-$sha.tar.gz"
+            Invoke-WebRequest -Uri "https://github.com/TsudaKageyu/minhook/archive/$sha.tar.gz" -OutFile $tarball
+            New-Item -ItemType Directory -Force -Path $thirdParty | Out-Null
+            tar -xzf $tarball -C $thirdParty
+            if ($LASTEXITCODE -ne 0) { throw "tar failed to extract MinHook with exit code $LASTEXITCODE" }
+            Rename-Item (Join-Path $thirdParty "minhook-$sha") "minhook"
+        }
+        if (-not (Test-Path (Join-Path $dest "src/hook.c"))) { throw "MinHook checkout incomplete: $dest\src\hook.c" }
+
+    - name: Prepare CEF
+      shell: pwsh
+      run: |
+        $cefVersion = (Get-Content (Join-Path $env:GITHUB_WORKSPACE "version.json") -Raw | ConvertFrom-Json).cef
+        $cefRoot = Join-Path $env:GITHUB_WORKSPACE "native/third_party/cef/$cefVersion"
+        if (-not (Test-Path (Join-Path $cefRoot "include"))) {
+            & (Join-Path $env:GITHUB_WORKSPACE "tools/init-cef.ps1") -CefVersion $cefVersion
+        }
+        # init-cef exits early when include/ exists, so after a cache restore the state
+        # file can point at the machine that filled the cache; rewrite path for this run.
+        $stateFile = Join-Path $env:GITHUB_WORKSPACE "native/third_party/cef-current.json"
+        $state = if (Test-Path $stateFile) { Get-Content $stateFile -Raw | ConvertFrom-Json -AsHashtable } else { @{} }
+        $state["cefVersion"] = $cefVersion
+        $state["path"] = $cefRoot
+        $state | ConvertTo-Json | Set-Content -Path $stateFile -Encoding UTF8
+
+    - name: Build host
+      shell: pwsh
+      run: ./tools/build-host.ps1 -Config Release
+
+    - name: Build helper
+      shell: pwsh
+      run: ./tools/build-helper.ps1 -Config Release

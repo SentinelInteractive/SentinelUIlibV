@@ -1,9 +1,7 @@
-// SentinelUI host-side logger. Own file (SentinelUI\logs\sentinelui_host_*.log) —
-// NEVER spam RagePluginHook.log. Same policy as the managed side.
+// SentinelUI host-side logger. Own file (SentinelUI\logs\sentinelui_host_*.log);
+// never write to RagePluginHook.log. Same policy as the managed side.
 
 #pragma once
-#ifndef SENTINEL_HOST_SUILOG_H
-#define SENTINEL_HOST_SUILOG_H
 
 #include <windows.h>
 #include <cstdio>
@@ -15,7 +13,8 @@ namespace sui_host {
 
 class Log {
 public:
-    // Call once with the absolute logs directory (file name prefix) — safe to call repeatedly.
+    // Call once with the absolute logs directory and the file name prefix; safe
+    // to call repeatedly.
     static void Initialize(const std::wstring& logDirectory,
                            const std::wstring& filePrefix = L"sentinelui_host");
 
@@ -46,5 +45,3 @@ private:
 #define SUI_LOG_ERROR(...) ::sui_host::Log::Error(__VA_ARGS__)
 
 }  // namespace sui_host
-
-#endif

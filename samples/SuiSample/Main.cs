@@ -8,10 +8,9 @@ using Rage;
 namespace SuiSample
 {
     /// <summary>
-    /// Pack entry point. LSPDFR scans <c>Plugins\LSPDFR\</c> and instantiates the RPH
-    /// <see cref="Plugin"/> class found in each assembly — callouts are NOT auto-discovered.
-    /// They must be registered explicitly with <see cref="Functions.RegisterCallout"/>,
-    /// normally when the player goes on duty (same pattern as SentinelCalloutsV).
+    /// Pack entry point. LSPDFR loads the RPH <see cref="Plugin"/> class found in this
+    /// assembly; callouts are not auto-discovered and must be registered with
+    /// <see cref="Functions.RegisterCallout"/>, here when the player goes on duty.
     /// </summary>
     public sealed class Main : Plugin
     {
@@ -26,7 +25,7 @@ namespace SuiSample
         {
             Game.LogTrivial("[SuiSample] pack loading...");
             Functions.OnOnDutyStateChanged += OnOnDutyStateChanged;
-            Game.LogTrivial("[SuiSample] loaded — go on duty to register the callout.");
+            Game.LogTrivial("[SuiSample] loaded; go on duty to register the callout.");
         }
 
         public override void Finally()
@@ -43,7 +42,7 @@ namespace SuiSample
                 Functions.RegisterCallout(typeof(SuiSampleCallout));
                 _registered = true;
                 Game.LogTrivial("[SuiSample] registered callout with LSPDFR.");
-                Game.DisplayNotification("~b~[SuiSample]~w~ callout registered — F4 console: ~y~ForceCallout SuiSample");
+                Game.DisplayNotification("~b~[SuiSample]~w~ callout registered; F4 console: ~y~ForceCallout SuiSample");
             }
             catch (Exception ex)
             {

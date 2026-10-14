@@ -1,4 +1,4 @@
-# build-host.ps1 — build the in-game ASI compositor (SentinelUI.asi).
+# build-host.ps1: build the in-game ASI compositor (SentinelUI.asi).
 # vswhere -> vcvars64 -> Ninja + MSVC. No CEF in this module anymore.
 
 param(

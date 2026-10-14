@@ -1,4 +1,4 @@
-# build-hoststub.ps1 — compile the fake host (SentinelUI.asi) used by the managed probe.
+# build-hoststub.ps1: compile the fake host (SentinelUI.asi) used by the managed probe.
 param(
     [ValidateSet("Debug", "Release")]
     [string]$Config = "Release"
@@ -14,12 +14,13 @@ $src = Join-Path $repo "native\hoststub\hoststub.c"
 $outDir = Join-Path $repo "native\hoststub\build"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $out = Join-Path $outDir "SentinelUI.asi"
+$opt = if ($Config -eq "Debug") { "/Od" } else { "/O2" }
 
 $cmd = @"
 @echo off
 call "$vcvars" >nul
 if errorlevel 1 exit /b 1
-cl /nologo /O2 /LD "$src" /Fe:"$out" /link
+cl /nologo $opt /LD "$src" /Fe:"$out" /link
 exit /b %errorlevel%
 "@
 $tmp = Join-Path $env:TEMP "sentinelui_build_hoststub.cmd"

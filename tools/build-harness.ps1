@@ -1,5 +1,6 @@
-# build-harness.ps1 — configure + build the CEF OSR validation harness with the MSVC toolchain.
+# build-harness.ps1: configure + build the CEF OSR validation harness with the MSVC toolchain.
 # Resolves the VS install (vswhere) and the pinned CEF distribution, then drives Ninja.
+# Internal-only: the OSR validation harness sources are not part of this repo.
 
 param(
     [ValidateSet("Debug", "Release")]
@@ -9,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
-# --- Locate VS toolchain ---------------------------------------------------
+# Locate VS toolchain.
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vswhere)) { throw "vswhere not found (Visual Studio Installer missing)." }
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -28,7 +29,7 @@ $linkPath = $linkExe.FullName
 $buildDir = Join-Path $repo "native\harness\build"
 Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
 
-# --- Locate the pinned CEF distribution -------------------------------------
+# Locate the pinned CEF distribution.
 $stateFile = Join-Path $repo "native\third_party\cef-current.json"
 $cef = $null
 if (Test-Path $stateFile) {
@@ -44,7 +45,7 @@ if (-not $cef) { throw "No extracted CEF distribution found (run tools\init-cef.
 $cef = $cef -replace '\\', '/'
 Write-Host "[build-harness] CEF: $cef" -ForegroundColor Cyan
 
-# --- Emit a .cmd wrapper (robust quoting for spaces) and run it -------------
+# Emit a .cmd wrapper (robust quoting for spaces) and run it.
 $cmdBody = @"
 @echo off
 call "$vcvars" >nul

@@ -1,10 +1,8 @@
-// SentinelUI Helper — IPC client to the in-game ASI.
+// SentinelUI Helper: IPC client to the in-game ASI.
 // One named pipe (\\.\pipe\SentinelUI, server = ASI). Client thread reads
 // commands; a small writer sends event lines back.
 
 #pragma once
-#ifndef SENTINEL_HELPER_IPC_H
-#define SENTINEL_HELPER_IPC_H
 
 #include <windows.h>
 #include <string>
@@ -26,5 +24,3 @@ bool IpcConnected();
 void IpcSendEvent(const std::string& utf8Body);
 
 }  // namespace sui_helper
-
-#endif

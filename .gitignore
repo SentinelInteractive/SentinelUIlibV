@@ -5,15 +5,11 @@ obj/
 .vs/
 .idea/
 *.suo
+*.obj
 
-# ===== Research docs: heavy CEF runtime binaries (375 MB on disk, NOT for git) =====
-docs/examples/WebUI/**/*.pak
-docs/examples/WebUI/**/*.dll
-docs/examples/WebUI/**/*.exe
-docs/examples/WebUI/**/*.asi
-docs/examples/WebUI/**/*.pdb
-docs/examples/WebUI/**/*.dat
-docs/examples/WebUI/**/*.bin
+# ===== Internal-only: never published (excluded from the open-source repo) =====
+/internal/
+native/harness/
 
 # ===== Stray binaries anywhere (safety net) =====
 *.asi
@@ -37,4 +33,3 @@ native/harness/*.yuv
 native/harness/harness_page.html
 native/harness/harness_trace.txt
 native/harness/debug.log
-.playwright-mcp/

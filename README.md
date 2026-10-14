@@ -1,109 +1,121 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/sentinel-interactive-dark.svg">
+    <img src="assets/sentinel-interactive.svg" alt="Sentinel Interactive" width="360">
+  </picture>
+</p>
+
 # SentinelUI
 
-A **UI library for RagePluginHook (RPH) and LSPDFR** plugins in GTA V single player.
-Plugin authors build in-game interfaces from plain **HTML/CSS/JS web components**, rendered by a
-dedicated **Chromium (CEF)** process and composited onto the game — callable from LSPDFR callout
-plugins and RPH plugins, with **no ScriptHookVDotNet dependency**.
+SentinelUI renders ordinary web pages on top of GTA V. A plugin authors its interface in HTML, CSS and JavaScript, and the runtime draws that page over the game with Chromium. Plugins do not need ScriptHookVDotNet, scaleforms or a UI component toolkit: a plugin brings a web page, and SentinelUI brings the rendering, input capture and the message channel between the page and the plugin code.
 
-**Loader requirement:** the native host (`SentinelUI.asi`) must be loaded at process start by an
-**ASI loader (ScriptHookV)** — it hooks the swapchain *before* RPH arms its Present-hook guard.
-The RPH plugin only attaches to that loaded module (it never `LoadLibrary`s it); if no ASI loader
-loads the host, SentinelUI degrades to a clean no-op instead of crashing. Why it has to be this
-way: `docs/LESSONS-LEARNED.md` §2 (2026-09-11 field test).
+SentinelUI targets RagePluginHook and LSPDFR plugins. It is part of Sentinel Interactive (project `0x52504637`).
 
-**Real-world example:** [PoliceTerminalPlus](https://github.com/maminka19482/PoliceTerminalPlus)
-is an LSPDFR terminal ported to SentinelUI: twelve HTML screens recreated from design mockups,
-`window.sui` requests for LSPDFR persona and vehicle data, and one captured layer opened from
-the `policeterminal` console command.
+## Status
+
+SentinelUI is pre-alpha. The following work in-game on GTA V Legacy:
+
+- The overlay renders: a CEF page reaches the screen as a D3D11 quad composited from the `Present` hook. F9 shows and hides it.
+- Input capture works with a software cursor (F10), click-through layers, z-order and per-layer focus.
+- Pages and plugin code exchange messages through `send`, `on` and `request` over a versioned JSON envelope.
+- The `sentinelui://` scheme serves plugin pages from disk with hot reload, and layers can also be created from inline HTML.
+- Every plugin AppDomain attaches as a client while one Bootstrap instance owns the host.
+- Diagnostics are available through `Sui.Status`, `Sui.Diagnose()` and the `sui status` / `sui diag` console commands.
+
+The stability matrix (borderless and fullscreen, Steam overlay, RAGENativeUI coexistence, LSPDFR duty cycles, long restart runs) and release packaging are still open.
+
+## How it works
+
+| Piece | Role |
+| --- | --- |
+| Web layer | The plugin's HTML/CSS/JS, served from `sentinelui://<plugin>/`. |
+| Render process | `SentinelUI_Host.exe`, a dedicated CEF process that renders pages offscreen and publishes frames through shared memory. |
+| Compositor | `SentinelUI.asi`, which hooks the game's `Present` and draws the visible layer stack. |
+| Managed API | `SentinelUI.API.dll` (net48), the facade plugins program against. |
+| Bootstrap | `SentinelUI.Bootstrap.dll`, the RagePluginHook plugin that owns the runtime lifecycle. |
+
+CEF runs in its own process on purpose. Embedding it in a DLL inside the game process crashes with a failfast on the first libcef call (`0xC0000409`), and the process split also means a page or browser crash cannot take the game down.
+
+## Requirements
+
+- GTA V Legacy (D3D11), Steam build 1.0.3889.x
+- RagePluginHook (RPH) 1.131.x with LSPD First Response 0.4.9; the minimum SDK versions are recorded in `version.json`
+- ScriptHookV as the ASI loader
+- Windows 10 or 11, x64, with .NET Framework 4.8
+
+`SentinelUI.asi` must stay in the game root. ScriptHookV loads it at process start so it can hook the swapchain before RPH arms its Present-hook guard, and Bootstrap only attaches to the loaded module.
+
+## Build
 
 ```
-WEB LAYER      <sui-panel> <sui-button> <sui-list> ... plain HTML/CSS/JS pages
-RENDER PROCESS SentinelUI_Host.exe   (dedicated CEF process — transparent OSR → shared memory)
-COMPOSITOR     SentinelUI.asi        (hooks D3D11 Present/WndProc; uploads SHM frames; spawns/supervises the helper)
-MANAGED API    SentinelUI.API.dll    (net48 static facade + events, exports of the ASI)
-BOOTSTRAP      SentinelUI.Bootstrap.dll (RPH plugin: loads host, pump, clean shutdown)
+dotnet build managed\SentinelUI.sln
+
+tools\init-cef.ps1        # one-time: downloads the pinned CEF build (see version.json)
+tools\build-host.ps1      # builds native\host   -> SentinelUI.asi
+tools\build-helper.ps1    # builds native\helper -> SentinelUI_Host.exe
+
+tools\pack.ps1            # deploys into your GTA V folder; refuses while the game is running
 ```
 
-## Why the helper-process split?
-CEF embedded *inside* a DLL in the game process failfaste with Chromium's hard `0xC0000409` on the
-first libcef call (verified by bisecting against the working EXE harness and by decompiling the
-WebUI binary — same wrapper, nothing exotic). Running CEF in its **own EXE process** (the shape the
-Phase-0 harness proved) sidesteps that entirely, and gives a bonus: **a page/browser crash can never
-take the game down.**
+`pack.ps1` installs the runtime like this:
+
+```
+<game>\SentinelUI.asi          the ASI compositor, loaded by ScriptHookV at process start
+<game>\SentinelUI_Host.exe     the CEF process
+<game>\libcef.dll, *.pak ...   the CEF runtime, flat next to the ASI
+<game>\SentinelUI\             content, logs and cache
+<game>\Plugins\                SentinelUI.Bootstrap.dll and SentinelUI.API.dll
+```
+
+## Quick start
+
+A plugin registers its content, creates a layer, answers page requests and pumps events once per frame:
+
+```csharp
+// RPH plugin. Bootstrap owns the host: never call Sui.Initialize or Sui.Shutdown.
+Sui.RegisterContentRoot("terminal", @"Plugins\MyTerminal\ui");
+var layer = Sui.CreateLayer("sentinelui://terminal/index.html");
+if (layer == null) return;   // runtime not installed; keep the plugin running
+
+layer.Request += req =>
+{
+    if (req.Type == "ped.scan") req.Reply(new { name = "..." });
+};
+
+GameFiber.StartNew(() =>
+{
+    layer.ShowCaptured();
+    while (true) { Sui.Pump(); GameFiber.Yield(); }
+});
+```
+
+On the page side, the runtime injects `sui.send(type, payload)`, `sui.on(type, handler)` and `sui.request(type, payload, timeoutMs)` before the first script runs. To build a page in a normal browser first, use the shim in `samples/browser-dev/`.
+
+Game keys: F9 hides and shows the overlay, F10 toggles input capture, F11 spawns the demo HUD layer.
 
 ## Repository layout
 
 | Path | Contents |
-|---|---|
-| `docs/` | Research material (LemonUI/RAGENativeUI sources, WebUI example, natives.json) + `PLAN.md` (authoritative plan), `PHASE0.md` (decision record), `PLUGIN-AUTHORING.md` (quickstart) |
-| `native/host/` | **ASI compositor**: MinHook swapchain hooks, WndProc, SHM frame consumer, renderer, `Sui*` exports |
-| `native/helper/` | **SentinelUI_Host.exe**: dedicated CEF process, transparent OSR, shared-memory frame publisher, self-test mode |
-| `native/hoststub/` | Fake host used by the managed load-path probe |
-| `native/harness/` | OSR validation harness (Phase-0 gate, still the regression baseline) |
-| `managed/SentinelUI.API/` | Managed bridge (net48), `Sui`/`SuiLayer` facade |
-| `managed/SentinelUI.Bootstrap/` | RPH plugin: loads host, per-frame pump, graceful shutdown, AppDomain assembly resolution |
-| `managed/tests/HostProbe/` | Console probe: managed⇄host contract (load, handshake, shutdown; incl. cross-AppDomain client) |
-| `samples/` | Working examples: LSPDFR callout pack (`SuiSample/`), browser dev shim (`browser-dev/`) |
-| `web/content/` | Demo pages (`p1_demo.html`, selftest page) + future `sui-*` toolkit |
-| `tools/` | `init-cef.ps1`, `build-{host,helper,harness,hoststub}.ps1`, `pack.ps1` (game deploy) |
-| `version.json` | Runtime version manifest |
+| --- | --- |
+| `native/host/` | `SentinelUI.asi`: the in-game compositor that hooks `Present` and the window procedure and draws the visible layers. |
+| `native/helper/` | `SentinelUI_Host.exe`: the CEF process that renders pages offscreen, serves `sentinelui://` and talks to the host over a named pipe. |
+| `native/hoststub/` | A fake host used by the managed load-path probe; not shipped. |
+| `native/third_party/` | The CEF SDK, fetched by `tools\init-cef.ps1` (not checked in). |
+| `managed/SentinelUI.API/` | The plugin-facing API (net48). This is the assembly plugins reference. |
+| `managed/SentinelUI.Bootstrap/` | The RPH plugin that owns the runtime lifecycle and the `sui` console commands. |
+| `managed/tests/HostProbe/` | A console probe for the load path and interop marshalling; runs without the game. |
+| `web/content/` | The demo pages shipped with the runtime: boot layer, HUD strip, badge and self-test page. |
+| `samples/SuiSample/` | A working LSPDFR callout pack that opens a SentinelUI panel. |
+| `samples/browser-dev/` | A `window.sui` shim and demo page for developing panels in a normal browser. |
+| `tools/` | Build, deploy and stress scripts. |
+| `assets/` | Logo artwork used by this README. |
 
-## Status (2026-09-08)
+`native/`, `web/`, `samples/` and `tools/` each have a README with the details.
 
-- ✅ **P0**: CEF pinned (LTS 144, validated); load-path/marshalling & OSR gates PASS.
-- ✅ **P1 core**: overlay **confirmed rendering in-game** — Chromium page composited onto GTA V
-  (helper process → shared memory → ASI Present hook). F9 show/hide works.
-- ⏳ **P1 stability matrix** (resolution/borderless, Steam overlay, RAGENativeUI, LSPDFR cycles,
-  20× restarts) — issue #4.
-- ✅ **P2**: input capture + JS↔C# bridge **verified in-game** (issue #1). Layer stack +
-  `sentinelui://` scheme **verified in-game** (issue #2, 2026-09-10 sessions: two layers,
-  z-order, click-through routing, F9/F11 toggles, per-layer viewport) — see `docs/GATE-P2.md`.
-- ⏳ **P3 in progress**: cross-domain event clients (API 0.3), inline-HTML layers, version
-  handshake — samples/NuGet still open (issue #3).
-- ❌ **P4 (web toolkit): not planned** — SentinelUI stays a generic HTML/CSS/JS renderer;
-  component libraries live in userland (issue #5 closed).
-- ⏳ **P5**: hardening & release (perf gates, crash capture, coexistence, packaging) — issue #6.
+## Contributing
 
-Tracked in GitHub issues: https://github.com/maminka19482/SentinelUIlib/issues
+The code style lives in `CODE-STYLE.md`: formatting is wired into the config files named there, and the page covers the conventions tools cannot check. Changes to the runtime should come with evidence (logs, repro steps or a gate note), not just a diff.
 
-## Current deploy layout (GTA V root)
+## License
 
-```
-<game>\SentinelUI.asi          ASI compositor — MUST stay in the root: ScriptHookV
-                               loads it at process start, before RPH's Present hook
-<game>\SentinelUI_Host.exe     dedicated CEF process
-<game>\libcef.dll + runtime    flat at root, next to the ASI
-<game>\locales\
-<game>\SentinelUI\             content\ · logs\ · cache\ · LICENSE_CEF.txt
-<game>\Plugins\                SentinelUI.Bootstrap.dll (+ API.dll)
-```
-
-> **Load-order constraint (2026-09-11):** moving the ASI into `SentinelUI\` and cold-loading
-> it from Bootstrap crashed the game — RPH detected the foreign Present hook installed after
-> its own and reverted the function (`Hook on our Present hook detected / Restoring untouched
-> D3D11Present`), breaking the D3D chain (AV in `dxgi!Present`). The root + ScriptHookV load
-> path is load-bearing until the Present hook is replaced by an RPH-native render path.
-> Full field note in `docs/LESSONS-LEARNED.md`.
-
-## Target environment (verified)
-
-- GTA V **Legacy** (not Enhanced) — proven on Steam, build 1.0.3889.x, D3D11
-- RagePluginHook 1.131.x (SDK on NuGet: 1.124.0), LSPD First Response 0.4.9
-- ScriptHookV (ASI loader) — required to load the root `SentinelUI.asi` at process start; without
-  it the overlay is disabled and the log says so (graceful, no crash)
-- Windows 10/11 x64, .NET Framework 4.8, no SHVDN required
-
-## Build
-
-- Managed: `dotnet build managed\SentinelUI.sln`
-- Native: `tools\build-host.ps1` + `tools\build-helper.ps1` (vswhere → vcvars64 → Ninja + MSVC; CEF
-  via `tools\init-cef.ps1`, pinned in `native\third_party\cef-current.json`)
-- Deploy: `tools\pack.ps1` (copies to the game folder; reversible)
-
-## Distribution & license
-
-SentinelUI is distributed **publicly**; the managed API + docs are the plugin-author surface.
-Released native runtime binaries (`SentinelUI.asi`, `SentinelUI_Host.exe`, CEF payload) may be
-shipped **obfuscated** — build against the documented `Sui*` API rather than reverse engineering
-the runtime. License: TBD (ask the maintainer before redistributing or bundling). CEF is
-BSD-licensed; its attribution ships with the runtime (`SentinelUI\LICENSE_CEF.txt`).
+SentinelUI is source-available under the PolyForm Strict License 1.0.0 (see `LICENSE`). You can read the source and learn from it, and use it for personal, noncommercial purposes such as hobby use, study and experiments. The license does not allow distributing it, modifying it, or publishing new works based on it. For anything beyond those terms, contact the maintainer first.

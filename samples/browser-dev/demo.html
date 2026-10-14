@@ -1,62 +1,121 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>SentinelUI browser dev shim</title>
-  <style>
-    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #e6edf3;
-           max-width: 720px; margin: 40px auto; padding: 0 16px; }
-    h1 { font-size: 18px; letter-spacing: .08em; text-transform: uppercase; color: #6ec1ff; }
-    button { margin: 6px 8px 6px 0; padding: 8px 14px; border: 0; border-radius: 5px;
-             background: #1f6feb; color: #fff; font-size: 14px; cursor: pointer; }
-    pre { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px;
-          min-height: 60px; font-size: 12px; overflow: auto; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SentinelUI browser dev shim</title>
+<style>
+  :root {
+    /* Same palette as the shipped pages, on a solid base instead of a game scrim. */
+    --base: #10141b;
+    --panel: #171d27;
+    --text: #e7e5df;
+    --muted: #9ba3ae;
+    --accent: #e8a13d;
+    --ok: #4cc38a;
+    --err: #ef6d6d;
+    --edge: rgba(231, 229, 223, 0.14);
+    --mono: Consolas, "Cascadia Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 40px;
+    background: var(--base); color: var(--text);
+    font: 14px/1.6 "Segoe UI", system-ui, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+  /* Section labels only: uppercase with tracking keeps them apart from body copy
+     without adding another size step to a dense tool page. */
+  h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0 0 12px; }
+  code { font-family: var(--mono); font-size: .92em; background: rgba(231, 229, 223, 0.07); padding: 1px 4px; border-radius: 3px; }
+  .lede { color: var(--muted); max-width: 68ch; }
+
+  .linkline {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+    margin: 4px 0 28px; padding: 10px 14px;
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 4px;
+  }
+  .state { font-weight: 600; letter-spacing: .08em; color: var(--muted); }
+  .state[data-state="live"] { color: var(--ok); }
+  .state[data-state="offline"] { color: var(--err); }
+  .note { color: var(--muted); font-size: 13px; }
+
+  .calls { margin-bottom: 28px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .btn {
+    min-height: 44px; padding: 10px 14px;
+    font: 13px/1.35 var(--mono);
+    color: var(--text); background: var(--panel);
+    /* 0.42 is the lightest edge that still clears 3:1 against both the page and the
+       button fill, so the button boundary stays visible without lighting the page up. */
+    border: 1px solid rgba(231, 229, 223, 0.42); border-radius: 4px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: rgba(231, 229, 223, 0.6); }
+  .btn:active { background: #1d2431; }
+  .btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  /* The one accented control: the plain request/response round trip. */
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--base); font-weight: 600; }
+  .btn.primary:hover { background: #f0b357; border-color: #f0b357; }
+
+  .output { border-top: 1px solid var(--edge); padding-top: 20px; }
+  .outputhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+  .empty { color: var(--muted); margin: 0; }
+  .log { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .entry { padding: 10px 12px; background: var(--panel); border: 1px solid var(--edge); border-radius: 4px; }
+  .entryhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .tag { font-size: 12px; font-weight: 600; letter-spacing: .1em; }
+  .tag[data-kind="ok"] { color: var(--ok); }
+  .tag[data-kind="err"] { color: var(--err); }
+  .tag[data-kind="sent"] { color: var(--muted); }
+  .call { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .entry pre {
+    margin: 6px 0 0; font: 12px/1.5 var(--mono); color: var(--text);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+</style>
 </head>
 <body>
-  <h1>SentinelUI — browser dev shim</h1>
-  <p>Same page code you ship in-game; the shim stands in for the runtime.</p>
+<main>
+  <h1>SentinelUI browser dev shim</h1>
+  <p class="lede">In-game the runtime injects <code>window.sui</code> before your page scripts run. Here
+    <code>sui-bridge.js</code> stands in for it, so the calls on this page are the calls your page
+    will make in-game.</p>
 
-  <button id="echo">sui.request('demo.echo')</button>
-  <button id="send">sui.send('demo.event')</button>
-  <button id="dev">sui.request('demo.custom') (suiDev reply)</button>
-  <pre id="out">—</pre>
+  <div class="linkline">
+    <span class="state" id="link" data-state="checking">CHECKING</span>
+    <span class="note" id="linknote">looking for window.sui</span>
+  </div>
 
-  <script src="sui-bridge.js"></script>
-  <script>
-    // Optional per-type fake replies, used only in the browser.
-    window.suiDev = {
-      'demo.custom': function (payload) {
-        return { custom: true, got: payload, at: new Date().toLocaleTimeString() };
-      }
-    };
+  <section class="calls">
+    <h2>Requests and events</h2>
+    <p class="lede">demo.echo, demo.custom and demo.slow are mapped in <code>window.suiDev</code>
+      (see <code>demo.js</code>). The other controls show the paths a page meets when nobody
+      answers: a missing handler, and a request that outruns its timeout. The last one simulates a
+      push arriving from the host.</p>
+    <div class="row">
+      <button class="btn primary" id="echo">sui.request('demo.echo')</button>
+      <button class="btn" id="send">sui.send('demo.event')</button>
+      <button class="btn" id="custom">sui.request('demo.custom')</button>
+      <button class="btn" id="slow">sui.request('demo.slow', 1200)</button>
+      <button class="btn" id="missing">sui.request('demo.missing')</button>
+      <button class="btn" id="push">host push 'demo.pushed'</button>
+    </div>
+  </section>
 
-    var out = document.getElementById('out');
-    function show(label, value) {
-      out.textContent = label + '\n' + JSON.stringify(value, null, 2);
-      console.log(label, value);
-    }
+  <section class="output">
+    <div class="outputhead">
+      <h2>What came back</h2>
+      <button class="btn" id="clear">clear output</button>
+    </div>
+    <p class="empty" id="empty">No calls yet. Every control above reports its result here.</p>
+    <ol class="log" id="out" aria-live="polite"></ol>
+  </section>
+</main>
 
-    sui.on('demo.pushed', function (payload) {
-      show('demo.pushed event received', payload);
-    });
-
-    document.getElementById('echo').onclick = async function () {
-      show('demo.echo resolved', await sui.request('demo.echo', { n: 42 }));
-    };
-
-    document.getElementById('send').onclick = function () {
-      sui.send('demo.event', { hello: 'host' });
-      show('demo.event sent', '(fire-and-forget)');
-    };
-
-    document.getElementById('dev').onclick = async function () {
-      show('demo.custom resolved', await sui.request('demo.custom', { q: 'x' }));
-    };
-
-    // Simulate a host push in the browser via the shim helper.
-    sui.send('demo.ready', { v: 1 });
-    setTimeout(function () { sui._emit('demo.pushed', { from: 'fake host' }); }, 500);
-  </script>
+<script src="sui-bridge.js"></script>
+<script src="demo.js"></script>
 </body>
 </html>

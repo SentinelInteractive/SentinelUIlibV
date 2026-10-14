@@ -7,14 +7,16 @@ using System.Threading;
 namespace SentinelUI.HostProbe
 {
     /// <summary>
-    /// Console probe for the P0 load-path/marshalling spike — no game required.
-    /// Usage: SentinelUI.HostProbe.exe [path\to\SentinelUI.asi]
+    /// Console probe for the load path and interop marshalling, no game required.
+    /// Usage: SentinelUI.HostProbe.exe [path\to\SentinelUI.asi] [--stub]
     /// Exercises: graceful degradation (host missing), LoadLibrary of an ".asi"-named PE,
     /// export resolution, host handshake (API version), layer creation, pump, shutdown.
+    /// --stub marks the fake hoststub: the sections that need the helper process skip.
     /// </summary>
     internal static class Program
     {
         private static int _failures;
+        private static bool _stub;
 
         private static void Check(bool condition, string what)
         {
@@ -26,7 +28,7 @@ namespace SentinelUI.HostProbe
         {
             Console.WriteLine("== SentinelUI HostProbe ==");
 
-            // 1. Graceful degradation BEFORE any host exists.
+            // 1. Graceful degradation before any host is loaded.
             Console.WriteLine("[1] host missing behavior");
             var layer = Sui.CreateLayer("sentinelui://x/y.html");
             Check(layer == null, "CreateLayer returns null when host unavailable");
@@ -37,7 +39,12 @@ namespace SentinelUI.HostProbe
 
             // 2. Initialize from an explicit path (the Bootstrap plugin will pass an absolute path).
             Console.WriteLine("[2] load & handshake");
-            string hostPath = args.Length > 0 ? args[0] : null;
+            string hostPath = null;
+            foreach (string arg in args)
+            {
+                if (string.Equals(arg, "--stub", StringComparison.OrdinalIgnoreCase)) _stub = true;
+                else if (string.IsNullOrEmpty(hostPath)) hostPath = arg;
+            }
             if (string.IsNullOrWhiteSpace(hostPath))
                 hostPath = Path.Combine(Environment.CurrentDirectory, "SentinelUI.asi");
             Check(File.Exists(hostPath), $"host file exists: {hostPath}");
@@ -47,7 +54,7 @@ namespace SentinelUI.HostProbe
             Check(Sui.HostAvailable, "HostAvailable is true after init");
             Check(Sui.HostApiVersion >= 1, "API version handshake ok (v" + Sui.HostApiVersion + ")");
 
-            // 3. Create a layer and exercise the facade (P2 plumbing, must not throw).
+            // 3. Create a layer and exercise the facade (must not throw).
             Console.WriteLine("[3] facade smoke");
             var okLayer = Sui.CreateLayer("sentinelui://probe/page.html");
             Check(okLayer != null, "CreateLayer works with living host");
@@ -66,20 +73,20 @@ namespace SentinelUI.HostProbe
             }
             okLayer?.Close();
 
-            // 3b. Issue-2 smoke (layer stack + sentinelui:// scheme) — needs the helper running.
-            Issue2(init);
-
-            // 3c. Issue-3 smoke (inline HTML layer) — needs the helper running.
-            Issue3InlineHtml(init);
-
-            // 3d. Issue-3 smoke (request/response bridge) — needs the helper running.
-            Issue4Requests(init);
-
-            // 3e. Issue-3 smoke (cross-AppDomain event client) — the LSPDFR domain model.
-            CrossDomain(init);
-
-            // 3e. Issue-1 smoke (IPC + capture + events) — needs the helper running.
-            Issue1(init);
+            // 3b-3f. Sections that drive real pages through the helper process; the fake
+            // host has no helper, so a --stub run skips them.
+            if (_stub)
+            {
+                Console.WriteLine("[5-9] skipped: stub host has no helper process");
+            }
+            else
+            {
+                Issue2(init);           // layer stack + sentinelui:// scheme
+                Issue3InlineHtml(init); // inline HTML layer
+                Issue4Requests(init);   // request/response bridge
+                CrossDomain(init);      // cross-AppDomain event client
+                Issue1(init);           // IPC + capture + events
+            }
 
             // 4. Graceful shutdown + repeat-safe behavior.
             Console.WriteLine("[4] shutdown");
@@ -247,7 +254,7 @@ namespace SentinelUI.HostProbe
 
                     // Scheme round-trip: the page's external JS must run in the page
                     // loaded through sentinelui:// and come back as a console event,
-                    // routed to THIS layer (per-layer Message event).
+                    // routed to this layer (per-layer Message event).
                     var got = new System.Collections.Generic.List<string>();
                     Action<SuiMessage> layerHandler = m => { lock (got) got.Add(m.Type + "|" + m.PayloadJson); };
                     l2.Message += layerHandler;
@@ -333,7 +340,7 @@ namespace SentinelUI.HostProbe
                 var events = new System.Collections.Generic.List<string>();
                 Action<SuiMessage> handler = m =>
                 {
-                    // Only events routed to THIS layer (other AppDomains' layers broadcast globally).
+                    // Only events routed to this layer (other AppDomains' layers broadcast globally).
                     if (m.Layer != layer) return;
                     lock (events) events.Add(m.Type + "|" + m.PayloadJson);
                 };
@@ -354,7 +361,7 @@ namespace SentinelUI.HostProbe
                         lock (events)
                         {
                             if (events.Exists(ev => ev.StartsWith("console|", StringComparison.Ordinal)))
-                                break;   // J reached the page and echoed back
+                                break;   // JS reached the page and echoed back
                         }
                         System.Threading.Thread.Sleep(50);
                     }
@@ -380,7 +387,7 @@ namespace SentinelUI.HostProbe
     /// <summary>
     /// Runs in a separate AppDomain for the issue-#3 cross-domain test. Uses the public API
     /// exactly like an LSPDFR plugin would: attach as a client, create a layer, pump its own
-    /// event queue — never touching host lifecycle (no Initialize/Shutdown).
+    /// event queue, never touching host lifecycle (no Initialize/Shutdown).
     /// </summary>
     public sealed class CrossDomainProbe : MarshalByRefObject
     {

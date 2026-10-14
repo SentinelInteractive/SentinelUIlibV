@@ -2,31 +2,57 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SentinelUI P2 demo — HUD strip</title>
+<title>SentinelUI HUD strip (F11)</title>
 <style>
-  :root { --hud-bg: rgba(8,12,20,0.55); --hud-accent: #3fa7ff; --hud-text: #e8edf5; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 100%; height: 100%; background: transparent; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; color: var(--hud-text); }
-  .hud {
-    position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
-    display: flex; gap: 22px; align-items: center;
-    background: var(--hud-bg); border: 1px solid rgba(255,255,255,0.16);
-    border-radius: 8px; padding: 8px 18px; letter-spacing: .06em;
+  :root {
+    /* Overlay palette. --err is a lightened tint of #e05252: at the 0.90 scrim
+       that red measures 3.6:1, under AA for 12px text. */
+    --text: #e7e5df;
+    --muted: #9ba3ae;
+    --ok: #4cc38a;
+    --err: #ef6d6d;
+    --scrim: rgba(16, 20, 27, 0.9);   /* 0.90 keeps text at AA over a white scene */
+    --edge: rgba(231, 229, 223, 0.16);
   }
-  .tag { color: var(--hud-accent); font-weight: 700; font-size: 13px; text-transform: uppercase; }
-  .item { font-size: 13px; color: #b8c6da; font-variant-numeric: tabular-nums; }
-  .ct { font-size: 11px; color: #7889a3; font-family: Consolas, monospace; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body {
+    font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    /* Click-through layer: no focus target, no mouse, no text selection. */
+    pointer-events: none;
+    user-select: none;
+  }
+  .strip {
+    position: fixed; top: 12px; left: 0; right: 0; margin: 0 auto;
+    /* Hugs the content on a wide screen, fills the width on a narrow one. */
+    width: max-content; max-width: calc(100% - 24px);
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center;
+    gap: 4px 16px;
+    padding: 6px 14px;
+    background: var(--scrim);
+    border: 1px solid var(--edge);
+    border-radius: 4px;
+  }
+  .brand { font-weight: 600; letter-spacing: .12em; }
+  .state { font-weight: 600; letter-spacing: .08em; color: var(--muted); }
+  .state[data-state="live"] { color: var(--ok); }
+  .state[data-state="offline"] { color: var(--err); }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
+  .facts, .url { font-size: 12px; color: var(--muted); }
+  .url { overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
-  <!-- Layer 2 in the acceptance test: composites ABOVE the boot layer (z 10) and is
-       click-through, so clicks pass to the interactive demo panel below. -->
-  <div class="hud">
-    <span class="tag">SentinelUI</span>
-    <span class="item" id="clock">--:--:--</span>
-    <span class="item">layer <b>2</b> · z 10 · click-through</span>
-    <span class="ct">sentinelui://sui/demo_hud.html</span>
+  <!-- F11 layer (created by the native host): composites above the boot layer,
+       carries no interactive element, and stays click-through so the game keeps
+       every click. -->
+  <div class="strip" role="status">
+    <span class="brand">SENTINEL</span>
+    <span class="state" id="link" data-state="checking">CHECKING</span>
+    <span class="clock mono" id="clock">--:--:--</span>
+    <span class="facts mono">F11 &middot; z 10 &middot; click-through</span>
+    <span class="url mono">sentinelui://sui/demo_hud.html</span>
   </div>
   <script src="demo_hud.js"></script>
 </body>

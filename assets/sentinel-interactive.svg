@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="20 0 501.66 114" fill="none" role="img" aria-label="Sentinel Interactive">
+  <text x="20" y="72.5" font-family="'Segoe UI', system-ui, sans-serif" font-size="46" font-weight="600" letter-spacing="0.5" fill="#22262e">Sentine</text>
+  <g fill="#22262e">
+    <rect x="205.24" y="17" width="20" height="20"/>
+    <rect x="205.24" y="47" width="20" height="20"/>
+    <rect x="205.24" y="77" width="20" height="20"/>
+    <rect x="241.24" y="17" width="20" height="20"/>
+    <rect x="241.24" y="47" width="20" height="20"/>
+    <rect x="241.24" y="77" width="20" height="20"/>
+  </g>
+  <text x="277.24" y="72.5" font-family="'Segoe UI', system-ui, sans-serif" font-size="46" font-weight="600" letter-spacing="0.5" fill="#22262e">nteractive</text>
+</svg>

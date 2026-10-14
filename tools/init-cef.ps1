@@ -1,4 +1,4 @@
-# init-cef.ps1 — download + extract a pinned CEF distribution for the SentinelUI native host.
+# init-cef.ps1: download + extract a pinned CEF distribution for the SentinelUI native host.
 #
 # Usage:
 #   .\init-cef.ps1 -CefVersion "144.0.34+g8fc21c8+chromium-144.0.7559.261"
@@ -9,9 +9,12 @@
 #     (https://cef-builds.spotifycdn.com/index.json) and verifies SHA-1.
 #   * Downloads to <repo>/native/third_party/_downloads/, extracts to
 #     <repo>/native/third_party/cef/<CefVersion>/  (tar.bz2 via bsdtar).
-#   * Writes <repo>/native/third_party/cef/current.json (source of truth for the pin).
-#   * Does NOT modify version.json — the pin becomes a decision after the harness validates OSR.
+#   * Writes <repo>/native/third_party/cef-current.json (the path the build scripts read).
+#   * Does not modify version.json (that pin is updated deliberately once a build validates the new CEF).
 
+# The CEF build index publishes SHA-1 checksums only; verifying them is the
+# point of this script, so the broken-algorithm warning does not apply here.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingBrokenHashAlgorithms', '', Justification = 'The CEF build index publishes SHA-1 checksums only.')]
 param(
     [Parameter(Mandatory = $true)]
     [string]$CefVersion,
@@ -20,14 +23,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-# Windows PowerShell 5.1 defaults to TLS 1.0 — never acceptable for modern CDNs.
+# Windows PowerShell 5.1 defaults to TLS 1.0, which modern CDNs refuse.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $downloads = Join-Path $repoRoot "native\third_party\_downloads"
 $cefRoot = Join-Path $repoRoot "native\third_party\cef"
 $outDir = Join-Path $cefRoot $CefVersion
-# Tracked state file lives OUTSIDE the ignored third_party tree so the pin is version-controllable.
+# Local state file read by the native build scripts; the tracked pin is the
+# "cef" entry in the repo-root version.json.
 $stateFile = Join-Path (Join-Path $repoRoot "native\third_party") "cef-current.json"
 
 $dbg = { param($m) Write-Host "[init-cef] $m" -ForegroundColor Cyan }

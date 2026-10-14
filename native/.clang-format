@@ -1,0 +1,13 @@
+# C++ formatting for native/, applied with: clang-format -i <files>
+# LLVM base (attached braces, 4-space continuation), with the house adjustments:
+# 4-space indent, 100 columns, left-aligned pointers and references.
+BasedOnStyle: LLVM
+Standard: c++20
+IndentWidth: 4
+TabWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -4
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+FixNamespaceComments: true

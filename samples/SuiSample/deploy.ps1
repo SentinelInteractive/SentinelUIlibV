@@ -1,4 +1,4 @@
-# deploy.ps1 — build + install the SuiSample callout into GTA V.
+# deploy.ps1: build + install the SuiSample callout into GTA V.
 param(
     [string]$GameDir = "D:\SteamLibrary\steamapps\common\Grand Theft Auto V",
     [ValidateSet("Debug", "Release")]

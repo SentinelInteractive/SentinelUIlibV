@@ -1,8 +1,6 @@
-// SentinelUI ASI side — shared-memory frame consumer (mirror of helper's shm.h).
+// SentinelUI ASI side: shared-memory frame consumer (mirror of the helper's shm.h).
 
 #pragma once
-#ifndef SENTINEL_HOST_FRAMESRC_H
-#define SENTINEL_HOST_FRAMESRC_H
 
 #include <windows.h>
 #include <cstdint>
@@ -64,5 +62,3 @@ private:
 };
 
 }  // namespace sui_host
-
-#endif

@@ -1,12 +1,10 @@
-// D3D11 overlay renderer: per-layer textures + z-ordered composite (issue #2).
+// D3D11 overlay renderer: per-layer textures + z-ordered composite.
 // Each layer's newest BGRA frame (from its own shared-memory mapping) is
 // uploaded into a texture on the game's device; DrawLayers composites the
 // visible stack back-to-front as fullscreen premultiplied-alpha quads in the
-// Present hook (game thread). Single-device design — no cross-device sharing.
+// Present hook (game thread). Single-device design: no cross-device sharing.
 
 #pragma once
-#ifndef SENTINEL_HOST_RENDERER_H
-#define SENTINEL_HOST_RENDERER_H
 
 #include <d3d11.h>
 #include <windows.h>
@@ -74,5 +72,3 @@ private:
 };
 
 }  // namespace sui_host
-
-#endif

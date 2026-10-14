@@ -1,4 +1,4 @@
-// SentinelUI Helper — IPC client implementation.
+// SentinelUI Helper: IPC client implementation.
 
 #include "ipc.h"
 #include "suilog.h"
@@ -19,7 +19,7 @@ std::thread g_writerThread;
 std::atomic<bool> g_stop{false};
 std::atomic<bool> g_connected{false};
 
-// Outbound event queue (writer flushes on the reader thread to keep it simple).
+// Outbound event queue (drained by the writer thread).
 std::mutex g_outMutex;
 std::vector<std::string> g_outQueue;
 
@@ -28,7 +28,7 @@ void (*g_onCommand)(const std::string&) = nullptr;
 
 // OVERLAPPED write helper: WriteFile with lpOverlapped=NULL on an overlapped
 // handle is documented to misreport completion and left events stuck in the
-// pipe in practice — always pass a real OVERLAPPED + event here.
+// pipe in practice; always pass a real OVERLAPPED + event here.
 void WriteLineBlocking(HANDLE pipe, const std::string& line, OVERLAPPED& wo) {
     DWORD written = 0;
     if (WriteFile(pipe, line.data(), (DWORD)line.size(), &written, &wo)) return;
@@ -150,11 +150,11 @@ void IpcSendEvent(const std::string& utf8Body) {
 std::wstring StartIpc(const std::wstring& pipeName) {
     g_stop = false;
     // Reconnect loop: the ASI creates the pipe before spawning us, but retry anyway.
-    // NOTE: overlapped handle is REQUIRED here: the reader thread waits for
-    // commands while the dedicated writer thread writes on the same duplex
-    // handle. On a synchronous handle a concurrent blocking write CANCELS the
-    // outstanding read (verified experimentally) and the command path dies.
-    // Both loops pass real OVERLAPPED structs (see ReaderLoop/WriteLineBlocking).
+    // The handle must be overlapped: the reader thread waits for commands while
+    // the dedicated writer thread writes on the same duplex handle. On a
+    // synchronous handle a concurrent blocking write cancels the outstanding read
+    // (verified experimentally) and the command path dies. Both loops pass real
+    // OVERLAPPED structs (see ReaderLoop/WriteLineBlocking).
     for (int i = 0; i < 100 && g_pipe == INVALID_HANDLE_VALUE && !g_stop; ++i) {
         g_pipe = CreateFileW(pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);

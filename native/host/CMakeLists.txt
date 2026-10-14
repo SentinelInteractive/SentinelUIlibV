@@ -1,4 +1,4 @@
-# SentinelUI — in-game ASI compositor (no CEF in this module!).
+# SentinelUI: in-game ASI compositor; no CEF in this module.
 # Responsibilities: hook Present/WndProc, spawn + supervise the dedicated
 # CEF helper process, composite its shared-memory frames, export the Sui* API.
 #

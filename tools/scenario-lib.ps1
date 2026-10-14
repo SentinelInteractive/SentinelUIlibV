@@ -1,10 +1,10 @@
-# scenario-lib.ps1 — in-session scenario library for the SentinelUI P1/P2 stress
-# matrix. NO param() block on purpose: this file is dot-sourced by stress.ps1 and
+# scenario-lib.ps1: in-session scenario library for the SentinelUI stress matrix.
+# NO param() block on purpose: this file is dot-sourced by stress.ps1 and
 # by scenario.ps1, and a param block would clobber the caller's variables
 # ($Scenario / $DryRun) when dot-sourced.
 #
 # Public functions: Get-GtaProcess, Test-ProcessRunning, Get-GtaWindowHandle,
-# Assert-Foreground, Focus-Gta, Write-Marker, Send-Tap, Send-Combo,
+# Assert-Foreground, Set-GtaForeground, Write-Marker, Send-Tap, Send-Combo,
 # Close-GameWindow, Request-GameQuit, Invoke-Scenario.
 #
 # Scenarios: LayerChurn | CaptureAltTab | Resize | DeviceLost | GameBar | HudTicks | QuitGame | All
@@ -193,7 +193,7 @@ function Assert-Foreground {
     }
 }
 
-function Focus-Gta {
+function Set-GtaForeground {
     param($Process)
     $gta = Get-GtaWindowHandle -Process $Process
     if ([SuiInput]::ForceForeground($gta)) { return }
@@ -286,7 +286,7 @@ function Send-Combo {
 function Close-GameWindow {
     param($Process)
     $h = [IntPtr]::Zero
-    try { $h = Get-GtaWindowHandle -Process $Process } catch { }
+    try { $h = Get-GtaWindowHandle -Process $Process } catch { Write-Verbose "Close-GameWindow: no window handle; falling back to taskkill" }
     if ($h -ne [IntPtr]::Zero) {
         [void][SuiInput]::PostMessage($h, [SuiInput]::WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero)
         return $true
@@ -311,7 +311,7 @@ function Request-GameQuit {
     $nudges = 0
     $sentExitChord = $false
     $handle = [IntPtr]::Zero
-    try { $handle = Get-GtaWindowHandle -Process $Process } catch { }
+    try { $handle = Get-GtaWindowHandle -Process $Process } catch { Write-Verbose "Request-GameQuit: no window handle; using the OS close path" }
 
     if ($handle -ne [IntPtr]::Zero) {
         if ([SuiInput]::ForceForeground($handle)) {
@@ -321,7 +321,7 @@ function Request-GameQuit {
     }
     if (-not $sentExitChord) {
         # No foreground window we can trust: ask the OS to close it instead.
-        try { Close-GameWindow -Process $Process | Out-Null } catch { }
+        try { Close-GameWindow -Process $Process | Out-Null } catch { Write-Verbose "Request-GameQuit: close fallback failed; waiting on the process" }
     }
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -334,14 +334,14 @@ function Request-GameQuit {
         # every time; never inject keys into whatever else is focused.
         try {
             $h = [IntPtr]::Zero
-            try { $h = Get-GtaWindowHandle -Process $Process } catch { }
+            try { $h = Get-GtaWindowHandle -Process $Process } catch { Write-Verbose "Request-GameQuit: handle re-check failed; skipping this nudge" }
             if ($h -ne [IntPtr]::Zero) {
                 if ([SuiInput]::ForceForeground($h)) {
                     Send-Tap -Vk $keyCode
                     $nudges++
                 }
             }
-        } catch { }
+        } catch { Write-Verbose "Request-GameQuit: confirmation attempt failed; retrying" }
     }
 
     if (Test-ProcessRunning -Id $Process.Id) {
@@ -425,7 +425,7 @@ function Invoke-Scenario {
             Write-Host ("  (dry-run) " + $step['Label'])
             continue
         }
-        try { Focus-Gta -Process $Process } catch { }
+        try { Set-GtaForeground -Process $Process } catch { Write-Verbose "pre-step focus attempt failed; the foreground assert decides next" }
         Assert-Foreground -Process $Process
         Write-Marker -Process $Process -Text "scenario=$Name step=$($step['Label'])"
         Write-Host ("  -> " + $step['Label'])
@@ -438,7 +438,7 @@ function Invoke-Scenario {
         }
         if ($step['Refocus'] -eq $true) {
             Start-Sleep -Milliseconds 800
-            Focus-Gta -Process $Process
+            Set-GtaForeground -Process $Process
         } elseif ($step['Refocus'] -eq $false) {
             Start-Sleep -Seconds 1
         } else {

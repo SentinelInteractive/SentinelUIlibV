@@ -1,11 +1,11 @@
-// SentinelUI_Host.exe — dedicated CEF host process.
+// SentinelUI_Host.exe: dedicated CEF host process.
 // EXE-hosted (harness-proven): own process, dedicated CEF thread, transparent OSR,
 // per-layer frames -> named shared memory for the in-game ASI compositor. Own
 // process also means a page/browser crash can never take the game down.
 //
-// Issue #2: the boot layer loads through the sentinelui:// content scheme
-// (default root "sui" -> <exe dir>\SentinelUI\content); additional layers are
-// created on demand by the ASI over the command pipe.
+// The boot layer loads through the sentinelui:// content scheme (default root
+// "sui" -> <exe dir>\SentinelUI\content); additional layers are created on
+// demand by the ASI over the command pipe.
 
 #include <windows.h>
 

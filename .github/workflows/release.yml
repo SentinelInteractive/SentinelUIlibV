@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# One group per tag: a re-push of the same tag queues instead of cancelling a publish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build managed
+        uses: ./.github/actions/build-managed
+
+      - name: Build native
+        uses: ./.github/actions/build-native
+
+      - name: Pack release
+        shell: pwsh
+        run: ./tools/pack-release.ps1 -Tag $env:GITHUB_REF_NAME
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release create $tag --title $tag --generate-notes "dist/SentinelUI-${tag}.zip"

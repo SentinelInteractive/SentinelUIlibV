@@ -1,4 +1,4 @@
-// SentinelUI ASI — IPC server implementation.
+// SentinelUI ASI: IPC server implementation.
 //
 // Transport lesson (verified offline + in-game): named-pipe I/O must use real
 // OVERLAPPED structures on the server handle. Blocking ReadFile/WriteFile
@@ -8,7 +8,7 @@
 // stalls its blocking reads. Hence: every operation here is OVERLAPPED with an
 // event and a bounded wait, and every wait polls g_stop so shutdown can always
 // join the threads (a thread blocked in ConnectNamedPipe/ReadFile without an
-// OVERLAPPED cannot be released by CloseHandle from another thread — verified).
+// OVERLAPPED cannot be released by CloseHandle from another thread; verified).
 
 #include "ipc.h"
 #include "suilog.h"
@@ -39,7 +39,7 @@ std::atomic<int> g_epoch{0};           // bumped on every helper connect
 
 void (*g_sink)(const char*) = nullptr;
 
-// ---- per-client event queues (host API v4, cross-AppDomain delivery) ----
+// Per-client event queues (host API v4, cross-AppDomain delivery)
 struct EventClient {
     unsigned long long token = 0;
     std::vector<std::string> queue;
@@ -164,9 +164,9 @@ void AcceptLoop() {
                 if (err != ERROR_IO_PENDING) break;                            // unusable instance
                 connectPending = true;
             }
-            // Still pending: wait (bounded) and NEVER re-issue while pending —
-            // overlapping a second ConnectNamedPipe on the same OVERLAPPED is
-            // undefined behaviour.
+            // Still pending: wait (bounded). Never re-issue while pending: a
+            // second ConnectNamedPipe on the same OVERLAPPED is undefined
+            // behaviour.
             if (WaitForSingleObject(co.hEvent, 250) == WAIT_OBJECT_0) {
                 DWORD n = 0;
                 connected = GetOverlappedResult(pipe, &co, &n, FALSE) != FALSE;
@@ -207,7 +207,7 @@ void AcceptLoop() {
             }
             if (readPending) {
                 // Bounded wait so g_stop/disconnects are observed; keep waiting on
-                // timeout — re-issuing ReadFile over a pending OVERLAPPED corrupts data.
+                // timeout; re-issuing ReadFile over a pending OVERLAPPED corrupts data.
                 DWORD w = WaitForSingleObject(ro.hEvent, 250);
                 if (w == WAIT_TIMEOUT) continue;
                 if (w != WAIT_OBJECT_0) { broken = true; break; }
@@ -221,7 +221,7 @@ void AcceptLoop() {
                 std::string line = acc.substr(0, nl);
                 acc.erase(0, nl + 1);
                 if (line.empty()) continue;
-                // Event envelope: "E<len>:<body>" — unwrap so the sink/managed side
+                // Event envelope: "E<len>:<body>"; unwrap so the sink/managed side
                 // only ever sees "<layerId>|<kind>:<body>".
                 if (line[0] == 'E') {
                     size_t colon = line.find(':');

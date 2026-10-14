@@ -6,13 +6,13 @@ using System.Threading;
 namespace SentinelUI
 {
     /// <summary>
-    /// SentinelUI's own file logger. Policy: NEVER spam RagePluginHook.log — everything of interest
-    /// goes here (ring/rotated file under &lt;game&gt;\SentinelUI\logs\). RPH's log only receives
+    /// SentinelUI's own file logger. Policy: never spam RagePluginHook.log; everything of interest
+    /// goes here (rotated file under &lt;game&gt;\SentinelUI\logs\). RPH's log only receives
     /// plugin lifecycle lines from the Bootstrap plugin.
     /// </summary>
     internal static class SuiLog
     {
-        private static readonly object Gate = new object();
+        private static readonly object _gate = new object();
         private static string _file;
         private static long _maxBytes = 2 * 1024 * 1024;
         private static long _bytes;
@@ -21,7 +21,7 @@ namespace SentinelUI
 
         public static void Initialize(string directory)
         {
-            lock (Gate)
+            lock (_gate)
             {
                 if (_file != null) return;
                 try
@@ -43,7 +43,7 @@ namespace SentinelUI
 
         private static void Write(string level, string message)
         {
-            lock (Gate)
+            lock (_gate)
             {
                 if (_file == null) return;
                 try

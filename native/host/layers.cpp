@@ -1,4 +1,4 @@
-// SentinelUI ASI — layer stack implementation (issue #2).
+// SentinelUI ASI: layer stack implementation.
 
 #include "layers.h"
 #include "ipc.h"

@@ -1,9 +1,9 @@
-// SentinelUI host (ASI) — game hooks:
-//   * IDXGISwapChain::Present / ResizeBuffers — function-level detours via MinHook.
+// SentinelUI host (ASI): game hooks.
+//   * IDXGISwapChain::Present / ResizeBuffers: function-level detours via MinHook.
 //     Present pumps every layer's shared-memory frames and composites the
 //     visible stack (z order, premultiplied alpha) onto the backbuffer.
-//   * WndProc subclass on the GTA V window — P1 hotkeys (F9 show/hide, F10
-//     capture) + the issue #2 layer stack: captured input is routed per layer
+//   * WndProc subclass on the GTA V window: hotkeys (F9 show/hide, F10
+//     capture) + the layer stack: captured input is routed per layer
 //     (keyboard -> focused layer, mouse -> topmost non-click-through layer).
 
 #include "hooks.h"
@@ -47,10 +47,10 @@ std::map<UINT, std::pair<UINT, bool>> g_keysDown;
 // Buttons currently forwarded while captured (0=left, 1=middle, 2=right; game thread
 // only). A release that never reaches the page (focus loss/alt-tab/capture toggle
 // while holding) would leave CEF believing the button is still down, blocking or
-// mis-firing subsequent clicks — capture transitions synthesize ups for these.
+// mis-firing subsequent clicks; capture transitions synthesize ups for these.
 bool g_mouseDown[3] = {false, false, false};
 
-// Forwarded key modifiers (bit 0 shift, bit 1 ctrl, bit 2 alt) — read on the game
+// Forwarded key modifiers (bit 0 shift, bit 1 ctrl, bit 2 alt): read on the game
 // thread when a key message is processed so CEF sees real modifier state
 // (Ctrl+C/V, Shift+arrows/selection, Alt combos). GetKeyState is reliable here
 // because the game thread is executing the window message.
@@ -85,7 +85,7 @@ void FocusLost() {
 }
 
 // Frame staging buffer (shared scratch; helper publishes up to 4K BGRA per
-// layer — each layer's newest frame is copied in and uploaded immediately).
+// layer; each layer's newest frame is copied in and uploaded immediately).
 std::vector<uint8_t> g_frameBuf;
 
 typedef HRESULT(WINAPI* PresentFn)(IDXGISwapChain*, UINT, UINT);
@@ -127,7 +127,7 @@ bool ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
     } else if (wParam == VK_F10) {
         SetCaptureState(!g_capture);
     } else {
-        ToggleDemoLayer();  // F11: demo HUD layer (issue #2 acceptance)
+        ToggleDemoLayer();  // F11: demo HUD layer (in-game acceptance)
     }
     return true;   // hotkeys are ours: never forward them to the page or the game
 }
@@ -136,10 +136,10 @@ bool ToggleHotkeys(WPARAM wParam, LPARAM lParam) {
 inline int Cx(LPARAM l) { return (short)LOWORD(l); }
 inline int Cy(LPARAM l) { return (short)HIWORD(l); }
 
-// --- capture cursor handling ------------------------------------------------
-// GTA V pins/hides the OS cursor while it owns the mouse, so WM_MOUSEMOVE never
-// arrives and an OSR page sees no motion. While captured we unclip + show the
-// cursor and poll GetCursorPos -> SendCommand (page cursor follows the mouse).
+// Capture cursor handling: GTA V pins/hides the OS cursor while it owns the
+// mouse, so WM_MOUSEMOVE never arrives and an OSR page sees no motion. While
+// captured we unclip + show the cursor and poll GetCursorPos -> SendCommand
+// (the page cursor follows the mouse).
 std::thread g_mouseThread;          // (started/stopped only from game thread)
 std::atomic<bool> g_mouseStop{true};
 std::atomic<int> g_lastCursorX{0};
@@ -339,8 +339,8 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
                 s_nextEnsureAttempt = 0;
                 // Textures were (re)created empty: force-upload every layer's
                 // resident frame on this Present, otherwise a layer stays
-                // invisible until its page happens to repaint (observed as the
-                // P2 panel "randomly disappearing then coming back" after GTA
+                // invisible until its page happens to repaint (observed as a
+                // panel "randomly disappearing then coming back" after GTA
                 // recreated the swapchain).
                 s_wasComposited = false;
                 if (s_compositePausedLogged) {

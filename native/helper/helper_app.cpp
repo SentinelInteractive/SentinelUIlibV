@@ -23,10 +23,6 @@ std::string ToUtf8(const std::wstring& w) {
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// LayerClient
-// ---------------------------------------------------------------------------
-
 LayerClient::LayerClient(int layerId)
     : layerId_(layerId) {}
 
@@ -71,9 +67,9 @@ void LayerClient::OnLoadingStateChange(CefRefPtr<CefBrowser>, bool isLoading, bo
         jsReady_ = true;
         loadRetries_ = 0;          // successful load clears the retry budget
         retryPending_ = false;
-        // Inject the software cursor once the page finished loading.
-        // Protocol bridge first (pages' scripts may use window.sui immediately),
-        // then the cursor/badge, then the current capture state.
+        // Inject the page scripts once loaded: protocol bridge first (page
+        // scripts may use window.sui immediately), then the cursor/badge, then
+        // the current capture state.
         QueueJs(kSuiJs);
         QueueJs(kCursorJs);
         QueueJs(captureOn_ ? kCaptureStateJsOn : kCaptureStateJsOff);
@@ -85,7 +81,7 @@ void LayerClient::OnLoadError(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, ErrorC
     std::string body = text.ToString() + " url=" + url.ToString();
     LogConsole("[load-error] " + body);
     SendEvent("load-error", body);
-    // Error pages still provide a runnable frame context — don't wedge queued JS.
+    // Error pages still provide a runnable frame context; don't wedge queued JS.
     jsReady_ = true;
 
     // First-navigation race insurance: retry sentinelui:// loads that fail with
@@ -171,9 +167,9 @@ void LayerClient::ExecuteJs(const std::string& javascript) {
 }
 
 // Protocol bridge injected into every page: window.sui with
-//   sui.send(type, payload)           – fire-and-forget event to C#/plugins
-//   sui.on(type, handler)             – receive events/replies (returns unsubscribe)
-//   sui.request(type, payload[, ms])  – Promise request -> SuiLayer.Request/Reply
+//   sui.send(type, payload)           fire-and-forget event to C#/plugins
+//   sui.on(type, handler)             receive events/replies (returns unsubscribe)
+//   sui.request(type, payload[, ms])  Promise request -> SuiLayer.Request/Reply
 // JS->C# travels as console lines prefixed "SUI:" (JSON envelope v1); C# -> JS
 // is delivered through window.sui._deliver (ExecuteJs), which also re-posts the
 // envelope on window.postMessage for pages that prefer raw listeners.
@@ -208,13 +204,13 @@ const char* kSuiJs =
     "_deliver:deliver};"
     "})();";
 
-// Software cursor: GTA V hides the OS cursor and OSR draws none — the page renders
-// its own arrow. It is only visible while input capture is on (window.__suiSetCapture),
-// uses a plain white/black arrow with a drop shadow instead of the old
-// mix-blend-mode:difference (which inverted whatever was under it), moves via
-// translate3d for smoothness and scales slightly on press. The same injected script
-// carries the input-capture badge. Deliberately no CSS `cursor:` property: OSR does
-// not draw one.
+// Software cursor: GTA V hides the OS cursor and OSR draws none, so the page
+// renders its own arrow. Visible only while input capture is on
+// (window.__suiSetCapture); a plain white/black arrow with a drop shadow replaces
+// the old mix-blend-mode:difference one (it inverted whatever was under it).
+// Moves via translate3d for smoothness and scales slightly on press. The same
+// injected script carries the input-capture badge. Deliberately no CSS `cursor:`
+// property: OSR does not draw one.
 const char* kCursorJs =
     "(function(){"
     "if(!document.getElementById('sui-cursor')){"
@@ -321,9 +317,9 @@ void LayerClient::DispatchMouseButton(int button, bool down, int x, int y) {
     CefBrowserHost::MouseButtonType type = MBT_LEFT;
     if (button == 1) type = MBT_MIDDLE;
     if (button == 2) type = MBT_RIGHT;
-    // CEF's third parameter is |mouseUp|, NOT mouseDown. Passing the raw down flag
+    // CEF's third parameter is |mouseUp|, not mouseDown. Passing the raw down flag
     // inverted every click (up before down), so Chromium only completed a button
-    // press on every second click — the "buttons are buggy" field report 2026-09-11.
+    // press on every second click (the "buttons are buggy" field report 2026-09-11).
     browser_->GetHost()->SendMouseClickEvent(ev, type, /*mouseUp=*/!down, 1);
 }
 
@@ -334,10 +330,6 @@ void LayerClient::DispatchMouseWheel(int delta, int x, int y) {
     ev.y = y;
     browser_->GetHost()->SendMouseWheelEvent(ev, 0, delta);
 }
-
-// ---------------------------------------------------------------------------
-// LayerManager
-// ---------------------------------------------------------------------------
 
 LayerManager& LayerManager::Instance() {
     static LayerManager inst;
@@ -545,9 +537,7 @@ void LayerManager::OnLayerBrowserClosed(int layerId) {
     SUI_LOG_INFO("layer %d closed.", layerId);
 }
 
-// ---------------------------------------------------------------------------
 // IPC command dispatch (reader thread -> LayerManager queue)
-// ---------------------------------------------------------------------------
 
 namespace {
 // Parses "<digits> <rest>" starting at pos; returns false when malformed.
@@ -587,7 +577,7 @@ void OnIpcCommand(const std::string& line) {
     int id = kBase;
     size_t pos = 1;
     switch (line[0]) {
-        case 'C': {  // C<id> <len>:<url> — create a layer browser
+        case 'C': {  // C<id> <len>:<url> (create a layer browser)
             // Bare "C1"/"C0" is the input-capture badge toggle (SetCaptureState);
             // the create form always has a space after the id.
             if (line.size() == 2 && (line[1] == '0' || line[1] == '1')) {
@@ -599,7 +589,7 @@ void OnIpcCommand(const std::string& line) {
                 LM().CreateLayer(id, url);
             break;
         }
-        case 'X': {  // X<id> — close a layer
+        case 'X': {  // X<id> (close a layer)
             int xid = atoi(line.c_str() + 1);
             LM().CloseLayer(xid > 0 ? xid : kBase);
             break;
@@ -636,22 +626,22 @@ void OnIpcCommand(const std::string& line) {
             else LM().Navigate(id, body);
             break;
         }
-        case 'L': {  // L<id> — hot reload
+        case 'L': {  // L<id> (hot reload)
             int lid = atoi(line.c_str() + 1);
             LM().Reload(lid > 0 ? lid : kBase);
             break;
         }
-        case 'A': {  // A1/A0 — master show/hide (F9: pause/resume all pages)
+        case 'A': {  // A1/A0 (master show/hide, F9 pause/resume all pages)
             bool visible = line.size() > 1 && line[1] == '1';
             LM().SetMasterVisible(visible);
             break;
         }
-        case 'R': {  // R<len>:<plugin>|<path> — register a content root
+        case 'R': {  // R<len>:<plugin>|<path> (register a content root)
             std::string body;
             if (ParseLenBody(line, 1, body)) Roots().Register(body);
             break;
         }
-        case 'V': {  // V<w> <h> — global viewport sync (all layers)
+        case 'V': {  // V<w> <h> (global viewport sync, all layers)
             int w = 0, h = 0;
             if (sscanf_s(line.c_str() + 1, "%d %d", &w, &h) == 2) LM().SetViewportAll(w, h);
             break;
@@ -693,9 +683,7 @@ void OnIpcCommand(const std::string& line) {
 
 void SetupIpcCommands() { SetCommandHandler(&OnIpcCommand); }
 
-// ---------------------------------------------------------------------------
-// SuiHelperApp — browser-process scheme registration
-// ---------------------------------------------------------------------------
+// SuiHelperApp: browser-process scheme registration
 
 void SuiHelperApp::OnContextInitialized() {
     CEF_REQUIRE_UI_THREAD();
@@ -705,9 +693,7 @@ void SuiHelperApp::OnContextInitialized() {
     RegisterSentinelUiScheme();
 }
 
-// ---------------------------------------------------------------------------
 // Browser-process run loop
-// ---------------------------------------------------------------------------
 
 int RunBrowserProcess(const HelperConfig& cfg) {
     std::string pageUrlUtf8 = ToUtf8(cfg.contentFile);
@@ -732,7 +718,6 @@ int RunBrowserProcess(const HelperConfig& cfg) {
     CefString(&settings.browser_subprocess_path) = ToUtf8(exePathW);   // self-spawn (EXE)
 
     CefRefPtr<SuiHelperApp> app(new SuiHelperApp());
-    // g_appInstance no longer exists; command dispatch goes through LayerManager.
 
     if (!CefInitialize(mainArgs, settings, app.get(), nullptr)) {
         SUI_LOG_ERROR("CefInitialize failed.");
