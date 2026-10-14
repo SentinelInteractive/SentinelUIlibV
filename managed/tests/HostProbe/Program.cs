@@ -8,13 +8,15 @@ namespace SentinelUI.HostProbe
 {
     /// <summary>
     /// Console probe for the load path and interop marshalling, no game required.
-    /// Usage: SentinelUI.HostProbe.exe [path\to\SentinelUI.asi]
+    /// Usage: SentinelUI.HostProbe.exe [path\to\SentinelUI.asi] [--stub]
     /// Exercises: graceful degradation (host missing), LoadLibrary of an ".asi"-named PE,
     /// export resolution, host handshake (API version), layer creation, pump, shutdown.
+    /// --stub marks the fake hoststub: the sections that need the helper process skip.
     /// </summary>
     internal static class Program
     {
         private static int _failures;
+        private static bool _stub;
 
         private static void Check(bool condition, string what)
         {
@@ -37,7 +39,12 @@ namespace SentinelUI.HostProbe
 
             // 2. Initialize from an explicit path (the Bootstrap plugin will pass an absolute path).
             Console.WriteLine("[2] load & handshake");
-            string hostPath = args.Length > 0 ? args[0] : null;
+            string hostPath = null;
+            foreach (string arg in args)
+            {
+                if (string.Equals(arg, "--stub", StringComparison.OrdinalIgnoreCase)) _stub = true;
+                else if (string.IsNullOrEmpty(hostPath)) hostPath = arg;
+            }
             if (string.IsNullOrWhiteSpace(hostPath))
                 hostPath = Path.Combine(Environment.CurrentDirectory, "SentinelUI.asi");
             Check(File.Exists(hostPath), $"host file exists: {hostPath}");
@@ -66,20 +73,20 @@ namespace SentinelUI.HostProbe
             }
             okLayer?.Close();
 
-            // 3b. Issue-2 smoke (layer stack + sentinelui:// scheme), needs the helper running.
-            Issue2(init);
-
-            // 3c. Issue-3 smoke (inline HTML layer), needs the helper running.
-            Issue3InlineHtml(init);
-
-            // 3d. Issue-3 smoke (request/response bridge), needs the helper running.
-            Issue4Requests(init);
-
-            // 3e. Issue-3 smoke (cross-AppDomain event client), the LSPDFR domain model.
-            CrossDomain(init);
-
-            // 3f. Issue-1 smoke (IPC + capture + events), needs the helper running.
-            Issue1(init);
+            // 3b-3f. Sections that drive real pages through the helper process; the fake
+            // host has no helper, so a --stub run skips them.
+            if (_stub)
+            {
+                Console.WriteLine("[5-9] skipped: stub host has no helper process");
+            }
+            else
+            {
+                Issue2(init);           // layer stack + sentinelui:// scheme
+                Issue3InlineHtml(init); // inline HTML layer
+                Issue4Requests(init);   // request/response bridge
+                CrossDomain(init);      // cross-AppDomain event client
+                Issue1(init);           // IPC + capture + events
+            }
 
             // 4. Graceful shutdown + repeat-safe behavior.
             Console.WriteLine("[4] shutdown");

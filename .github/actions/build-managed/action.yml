@@ -17,5 +17,5 @@ runs:
       run: |
         $probe = Join-Path $env:GITHUB_WORKSPACE "managed/tests/HostProbe/bin/Release/SentinelUI.HostProbe.exe"
         $stub = Join-Path $env:GITHUB_WORKSPACE "native/hoststub/build/SentinelUI.asi"
-        & $probe $stub
+        & $probe $stub --stub
         if ($LASTEXITCODE -ne 0) { throw "HostProbe failed with exit code $LASTEXITCODE" }
