@@ -11,8 +11,10 @@ permissions:
   contents: read
 
 # Branch pushes and their PR runs share one group so a ref never builds CEF twice.
+# head_ref is set on pull_request runs and empty on pushes, so fall back to the
+# branch name; github.ref would not match between the two events.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
