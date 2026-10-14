@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>SentinelUI.Bootstrap</AssemblyName>
     <RootNamespace>SentinelUI.Bootstrap</RootNamespace>
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
     <!-- RPH SDK is compile-time only: NEVER ship RagePluginHook.dll (RPH provides it at runtime). -->
   </PropertyGroup>
 

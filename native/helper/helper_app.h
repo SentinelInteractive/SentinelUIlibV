@@ -1,16 +1,14 @@
-// SentinelUI Helper — CEF host inside a dedicated EXE process.
+// SentinelUI Helper: CEF host inside a dedicated EXE process.
 // Proven harness pattern: dedicated CEF thread + CefDoMessageLoopWork pump,
 // transparent OSR with --disable-gpu, OnPaint -> per-layer shared-memory frame.
 //
-// Issue #2 layer model: every UI layer owns a CefBrowser + a named shared
+// Layer model: every UI layer owns a CefBrowser + a named shared
 // memory mapping (layer 1 = the boot page; ids >= 2 are created on demand by
 // the ASI via the 'C' command). The ASI composites the per-layer frames in
 // z order. Layer operations arriving on the IPC reader thread are queued and
 // executed on the CEF UI (pump) thread.
 
 #pragma once
-#ifndef SENTINEL_HELPER_APP_H
-#define SENTINEL_HELPER_APP_H
 
 #include <windows.h>
 
@@ -63,10 +61,8 @@ struct HelperConfig {
     unsigned long parentPid = 0; // game process pid (fast orphan cleanup)
 };
 
-// ---------------------------------------------------------------------------
 // One UI layer: CefClient + render/display/load handlers + frame mapping.
-// All CEF-touching methods MUST run on the CEF UI (pump) thread.
-// ---------------------------------------------------------------------------
+// All CEF-touching methods run on the CEF UI (pump) thread only.
 class LayerClient : public CefClient,
                     public CefRenderHandler,
                     public CefLifeSpanHandler,
@@ -102,7 +98,7 @@ public:
     CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
     CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
 
-    // CefRequestHandler — request diagnostics (one log line per URL prefix).
+    // CefRequestHandler: request diagnostics (one log line per URL prefix).
     CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
         CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request,
         bool is_navigation, bool, const CefString&, bool&) override {
@@ -152,17 +148,17 @@ public:
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
 
-    // CefDisplayHandler — JS->host channel (console messages, layer-tagged).
+    // CefDisplayHandler: JS->host channel (console messages, layer-tagged).
     bool OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t, const CefString& message,
                           const CefString&, int) override;
 
-    // CefLoadHandler — load state events + software cursor injection.
+    // CefLoadHandler: load state events + software cursor injection.
     void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool isLoading, bool, bool) override;
 
     void OnLoadError(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, ErrorCode code,
                      const CefString& text, const CefString& url) override;
 
-    // ---- commands (UI thread) ----
+    // Commands (UI thread).
     void ExecuteJs(const std::string& javascript);
     void SetVisible(bool visible);
     void SetMasterVisible(bool visible);
@@ -216,9 +212,7 @@ private:
     IMPLEMENT_REFCOUNTING(LayerClient);
 };
 
-// ---------------------------------------------------------------------------
 // CefApp (all processes) + browser/render process handlers.
-// ---------------------------------------------------------------------------
 class SuiHelperApp : public CefApp,
                      public CefBrowserProcessHandler,
                      public CefRenderProcessHandler {
@@ -246,7 +240,7 @@ public:
 
     // Renderer process: inject the window.sui bridge into EVERY frame context
     // before any page script runs. The browser-process post-load injection alone
-    // raced page scripts (inline <script>s executed while window.sui was absent —
+    // raced page scripts (inline <script>s executed while window.sui was absent;
     // caught by the HostProbe request test 2026-09-12).
     void OnContextCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
                           CefRefPtr<CefV8Context> context) override {
@@ -263,10 +257,8 @@ private:
     IMPLEMENT_REFCOUNTING(SuiHelperApp);
 };
 
-// ---------------------------------------------------------------------------
-// Layer manager: owns all LayerClients. Public ops are thread-safe — they are
+// Layer manager: owns all LayerClients. Public ops are thread-safe: they are
 // queued and executed on the CEF UI (pump) thread via PumpOps().
-// ---------------------------------------------------------------------------
 class LayerManager {
 public:
     static LayerManager& Instance();
@@ -334,5 +326,3 @@ void StartParentWatchdog(unsigned long parentPid);
 bool ParentProcessGone();
 
 }  // namespace sui_helper
-
-#endif

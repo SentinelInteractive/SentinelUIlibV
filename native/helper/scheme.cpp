@@ -1,4 +1,4 @@
-// SentinelUI Helper — sentinelui:// scheme implementation (issue #2).
+// SentinelUI Helper: sentinelui:// scheme implementation.
 
 #include "scheme.h"
 #include "suilog.h"
@@ -18,9 +18,7 @@
 
 namespace sui_helper {
 
-// ---------------------------------------------------------------------------
 // Content roots
-// ---------------------------------------------------------------------------
 
 ContentRoots& Roots() {
     static ContentRoots inst;
@@ -114,9 +112,9 @@ bool SafeRelPath(const std::string& urlPath, std::wstring& rel) {
 }
 
 std::string MimeForExtension(const std::wstring& path) {
-    // NOTE: bare MIME types only — CefResponse::SetMimeType writes Content-Type
-    // directly and a "type/subtype; charset=..." suffix yields an unparseable
-    // type, which Chromium then renders as plain text (source view).
+    // Bare MIME types only: CefResponse::SetMimeType writes Content-Type directly
+    // and a "type/subtype; charset=..." suffix yields an unparseable type, which
+    // Chromium then renders as plain text (source view).
     size_t dot = path.find_last_of(L'.');
     if (dot == std::wstring::npos) return "application/octet-stream";
     std::wstring ext = path.substr(dot + 1);
@@ -140,7 +138,7 @@ std::string MimeForExtension(const std::wstring& path) {
     return "application/octet-stream";
 }
 
-// CSP applied to every HTML response (issue #2: CSP-tight content).
+// CSP applied to every HTML response.
 // connect-src 'self' is required for pages that fetch sibling files (the UI router
 // loads screen fragments with fetch; 2026-09-12 in-game fix).
 const char kContentCsp[] =
@@ -163,8 +161,8 @@ bool ContentRoots::Resolve(const std::string& pluginUtf8, const std::string& rel
         root = it->second;
     }
 
-    // Join and re-verify containment (defense in depth against symlink/junction
-    // style surprises is NOT implied; this blocks textual traversal).
+    // Join, then re-verify containment. This blocks textual traversal only;
+    // symlink/junction escapes are not covered.
     std::wstring candidate = root + L"\\" + rel;
     wchar_t full[_MAX_PATH + 2];
     if (_wfullpath(full, candidate.c_str(), _MAX_PATH + 1) == nullptr) return false;
@@ -183,9 +181,7 @@ bool ContentRoots::Resolve(const std::string& pluginUtf8, const std::string& rel
     return true;
 }
 
-// ---------------------------------------------------------------------------
 // Resource handler
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -316,7 +312,7 @@ bool RegisterSentinelUiScheme() {
 
 void LogSchemeRegistration(bool ok) {
     // Runs in every CEF process (no logger initialized in children). Derive the
-    // log dir from the exe location — no command-line args needed.
+    // log dir from the exe location; no command-line args needed.
     wchar_t exe[MAX_PATH * 2];
     DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH * 2);
     if (n == 0) return;

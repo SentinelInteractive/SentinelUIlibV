@@ -1,4 +1,4 @@
-# scenario.ps1 — CLI wrapper for single in-session scenarios.
+# scenario.ps1: CLI wrapper for single in-session scenarios.
 #
 #   pwsh -File tools\scenario.ps1 -Scenario CaptureAltTab
 #   pwsh -File tools\scenario.ps1 -Scenario QuitGame        # close a running game

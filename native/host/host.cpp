@@ -1,5 +1,5 @@
-// SentinelUI host (ASI) — module entry + exported C API.
-// No CEF here anymore: this module spawns and supervises SentinelUI_Host.exe
+// SentinelUI host (ASI): module entry + exported C API.
+// No CEF here: this module spawns and supervises SentinelUI_Host.exe
 // (the dedicated CEF process), consumes its shared-memory frames, and hooks the
 // game (Present + WndProc) to composite them.
 //
@@ -9,7 +9,7 @@
 //                               -> open shared memory (frame source).
 //   SuiShutdown() (Bootstrap unload) -> stop helper, remove hooks.
 //
-// Layer stack (issue #2): layer 1 is the boot page (sentinelui://sui/p1_demo.html);
+// Layer stack: layer 1 is the boot page (sentinelui://sui/p1_demo.html);
 // plugins add layers with SuiCreateLayer (ids >= 2). Every layer owns a frame
 // mapping; the Present hook composites the visible stack in z order and the
 // WndProc hook routes captured input to the focused/topmost interactive layer.
@@ -18,10 +18,10 @@
 // process start, BEFORE RPH installs its Present hook. Bootstrap attaches to
 // the already-loaded module. Loading it later (e.g. cold-load from the
 // subfolder at RPH plugin-load time) makes RPH's hook guard detect a foreign
-// hook on Present, revert the function and crash the D3D chain — observed
-// 2026-09-11 (RPH log "Hook on our Present hook detected / Restoring
-// untouched D3D11Present"; AV in dxgi!Present). Do not move this file into a
-// subfolder unless the Present hook is replaced by an RPH-native render path.
+// hook on Present, revert the function and crash the D3D chain (observed
+// 2026-09-11: RPH log "Hook on our Present hook detected", AV in dxgi!Present).
+// Do not move this file into a subfolder unless the Present hook is replaced by
+// an RPH-native render path.
 
 #include "exports.h"
 #include "crash.h"
@@ -71,9 +71,9 @@ namespace {
 
 using namespace sui_host;
 
-// Pending helper process.
+// Live helper process handle (terminated on shutdown).
 HANDLE g_helperProcess = nullptr;
-// F11 acceptance layer (sentinelui://sui/demo_hud.html) — 0 when not spawned.
+// F11 acceptance layer (sentinelui://sui/demo_hud.html); 0 when not spawned.
 std::atomic<int> g_demoLayer{0};
 
 void Trace(const char* what);
@@ -245,7 +245,7 @@ DWORD WINAPI BootThread(LPVOID) {
     }
 
     // Debug escape hatch for out-of-game smoke tests (HostProbe): no window,
-    // no hooks — just start the helper + open frames.
+    // no hooks; start the helper and open frames only.
     char dbg[2] = {0};
     if (GetEnvironmentVariableA("SENTINELUI_DEBUG_NOWINDOW", dbg, 2) == 1 && dbg[0] == '1') {
         SUI_LOG_INFO("DEBUG_NOWINDOW=1: skipping window+hooks, starting helper only.");
@@ -284,7 +284,7 @@ void StopHost() {
 
 }  // namespace
 
-// ---- input capture state (managed + F10) ----
+// Input capture state (managed API + F10).
 namespace sui_host {
 void SetCaptureState(bool on) {
     g_capture = on;
@@ -294,10 +294,10 @@ void SetCaptureState(bool on) {
 }
 }  // namespace sui_host
 
-// ---- F11 demo layer (issue #2 in-game acceptance) ---------------------------
+// F11 demo layer (in-game acceptance for the layer stack).
 namespace sui_host {
 void ToggleDemoLayer() {
-    // Existing layer: pure show/hide (instant — no browser create/reload).
+    // Existing layer: pure show/hide (instant, no browser create/reload).
     int id = g_demoLayer.load();
     if (id && g_layers.Exists(id)) {
         LayerTable::Info info;
@@ -317,7 +317,7 @@ void ToggleDemoLayer() {
 }
 }  // namespace sui_host
 
-// ---- exported C API ----------------------------------------------------------
+// Exported C API.
 
 extern "C" {
 
@@ -334,7 +334,7 @@ void SuiPumpEvents(void) {
 
 void SuiShutdown(void) { StopHost(); }
 
-// ---- issue #1 exports ----
+// Command, capture and event plumbing exports.
 void SuiCmdVisible(int layerId, int visible) {
     if (layerId > 0) { sui_host::g_layers.SetVisible(layerId, visible != 0); return; }
     SendCommand(visible ? "S\n" : "H\n");   // legacy no-id form (id 1 helper-side)
@@ -366,7 +366,7 @@ void SuiSetCapture(int enabled) { ::sui_host::SetCaptureState(enabled != 0); }
 int  SuiIsCaptureActive(void) { return g_capture ? 1 : 0; }
 void SuiRegisterEventSink(void (*cb)(const char* utf8)) { ::sui_host::SetEventSink(cb); }
 
-// ---- issue #2 exports (layer stack + content scheme) ----
+// Layer stack and content scheme exports.
 
 int SuiCreateLayer(const char* urlUtf8) {
     if (!urlUtf8 || !*urlUtf8) return 0;
@@ -424,7 +424,7 @@ int SuiRegisterContentRoot(const char* pluginUtf8, const char* rootPathUtf8) {
     return 1;
 }
 
-// ---- issue #3 exports (per-client event queues, host API v4) ----
+// Per-client event queue exports (host API v4).
 
 unsigned long long SuiRegisterEventClient(void) {
     return sui_host::RegisterEventClient();
@@ -450,7 +450,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
         // the same process (e.g. a stray root+subfolder deploy), it must not boot
         // a second helper or install a second hook chain. It stays inert and
         // reports API version -1 (see SuiGetApiVersion). The name is per-process
-        // (pid) so an unrelated process -- a probe or a second game instance --
+        // (pid) so an unrelated process (a probe or a second game instance)
         // does not collide with this one. The handle is kept open for the
         // process lifetime to hold the claim.
         std::wstring instanceName = L"Local\\SentinelUI_Host_Instance_v1_" +
@@ -468,8 +468,8 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID) {
         // see the header comment), so runtime data lives under <module>\SentinelUI\.
         g_paths.helperExe = g_paths.moduleDir + L"\\SentinelUI_Host.exe";
         g_paths.contentDir = g_paths.moduleDir + L"\\SentinelUI\\content";
-        // Boot layer rides the sentinelui:// scheme (issue #2). file:// is gone
-        // from the content path; the default "sui" root maps to content\.
+        // Boot layer rides the sentinelui:// scheme. file:// is gone from the
+        // content path; the default "sui" root maps to content\.
         g_paths.contentUrl = L"sentinelui://sui/p1_demo.html";
         g_paths.cacheDir = g_paths.moduleDir + L"\\SentinelUI\\cache";
         g_paths.logDir = g_paths.moduleDir + L"\\SentinelUI\\logs";

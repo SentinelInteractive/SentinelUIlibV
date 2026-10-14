@@ -1,4 +1,4 @@
-// SentinelUI ASI — layer stack (issue #2).
+// SentinelUI ASI: layer stack.
 //
 // The host owns the layer model: every plugin UI surface is one layer with an
 // id, z-order, visibility, click-through flag and (exclusive) input focus. The
@@ -15,8 +15,6 @@
 // thread for input routing).
 
 #pragma once
-#ifndef SENTINEL_HOST_LAYERS_H
-#define SENTINEL_HOST_LAYERS_H
 
 #include "framesrc.h"
 
@@ -31,7 +29,7 @@ namespace sui_host {
 class LayerTable {
 public:
     static constexpr int kBaseLayerId = 1;
-    static constexpr int kMaxLayers = 8;       // P5 budget: <=3 visible at once
+    static constexpr int kMaxLayers = 8;       // budget: at most 3 visible at once
     static constexpr uint32_t kMaxFrameW = 4096;
     static constexpr uint32_t kMaxFrameH = 2160;
 
@@ -121,5 +119,3 @@ private:
 };
 
 }  // namespace sui_host
-
-#endif

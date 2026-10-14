@@ -1,21 +1,19 @@
-// SentinelUI Helper — sentinelui:// content scheme (issue #2).
+// SentinelUI Helper: sentinelui:// content scheme.
 //
 //   sentinelui://<plugin>/<relpath>  ->  <registered root>\<relpath>
 //
-// Rules (issue #2 acceptance):
+// Rules:
 //  * local-only: every request is resolved against a plugin-registered local
 //    content root; the scheme never touches the network and is registered as a
 //    standard scheme handled entirely in the browser process.
 //  * traversal-safe: path segments are validated (no "..", no drive/UNC parts,
 //    no percent-encoding games); the resolved file must stay under the root.
 //  * CSP-tight: HTML responses carry a strict Content-Security-Policy
-//    (external scripts only — inline <script> is blocked by design).
+//    (external scripts only; inline <script> is blocked by design).
 //  * hot reload: files are read from disk on EVERY request and responses are
 //    marked no-store, so editing a page + reload is enough.
 
 #pragma once
-#ifndef SENTINEL_HELPER_SCHEME_H
-#define SENTINEL_HELPER_SCHEME_H
 
 #include <map>
 #include <mutex>
@@ -61,5 +59,3 @@ bool RegisterSentinelUiScheme();
 void LogSchemeRegistration(bool ok);
 
 }  // namespace sui_helper
-
-#endif

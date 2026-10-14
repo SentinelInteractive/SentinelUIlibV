@@ -7,11 +7,10 @@ namespace SentinelUI
     /// <summary>
     /// Low-level bridge to the native CEF host module (SentinelUI.asi).
     ///
-    /// LOAD CONTRACT (2026-09-11): the ASI is loaded at process start by the ASI loader
-    /// (ScriptHookV loads root *.asi) — it MUST precede RPH's Present hook; RPH's hook
-    /// guard reverts foreign Present hooks installed later (instant crash, see
-    /// docs/LESSONS-LEARNED.md §2). In-game the Bootstrap plugin calls
-    /// Initialize(..., allowLoad:false) and this class only ATTACHES to the already-loaded
+    /// Load contract (2026-09-11): ScriptHookV must load the root ASI at process start.
+    /// RPH's Present-hook guard reverts foreign Present hooks installed later, which
+    /// crashes the D3D chain. In-game the Bootstrap plugin calls
+    /// Initialize(..., allowLoad:false) and this class only attaches to the already-loaded
     /// module (GetModuleHandle). LoadLibrary-by-path remains for offline probes/tests
     /// (allowLoad default) and degrades gracefully when the host is absent.
     /// </summary>
@@ -19,29 +18,9 @@ namespace SentinelUI
     {
         private const string LogDirectory = "SentinelUI";
 
-        // ---- host export table (mirrors native/host_exports.h, versioned by SuiGetApiVersion) ----
-        // v2 planned exports:
-        //   int    SuiGetApiVersion(void)
-        //   const  SuiVersion* SuiGetVersion(void)
-        //   int    SuiCreateLayer(const wchar_t* urlOrHtml)
-        //   int    SuiCloseLayer(int layerId)
-        //   void   SuiCloseAllLayers(void)
-        //   void   SuiSetLayerVisible(int layerId, int visible)
-        //   int    SuiIsLayerVisible(int layerId)
-        //   void   SuiSetLayerZ(int layerId, int z)
-        //   void   SuiBringToFront(int layerId) / SuiSendToBack(int layerId)
-        //   void   SuiSetLayerClickThrough(int layerId, int enabled)
-        //   int    SuiIsLayerClickThrough(int layerId)
-        //   void   SuiSetLayerFocus(int layerId, int keyboard, int mouse)
-        //   int    SuiIsLayerFocused(int layerId)
-        //   void   SuiExecuteJs(int layerId, const char* jsUtf8)
-        //   void   SuiSendData(int layerId, const char* jsonEnvelopeUtf8)
-        //   uint64 SuiRegisterEventSink(SuiEventCallback cb, int* outEpoch)
-        //   void   SuiUnregisterEventSink(uint64 token)
-        //   void   SuiPumpEvents(void)                 // drains per-token queues (call on game thread)
-        //   void   SuiShutdown(void)                    // Bootstrap unload ONLY, never PROCESS_DETACH
-        //   int    SuiHealth(SuiHealth* outHealth)
-        // Phase 0/1 skeleton only wires: SuiGetApiVersion, SuiPumpEvents, SuiShutdown.
+        // Host export table, versioned by SuiGetApiVersion (mirrors native/host/exports.h).
+        // Each export is resolved with GetProcAddress; a missing one disables that feature
+        // instead of failing the attach, so older runtimes keep working.
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr LoadLibraryW(string lpFileName);
@@ -64,7 +43,7 @@ namespace SentinelUI
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void SuiShutdownDelegate();
 
-        // ---- issue #1 exports ----
+        // Issue #1 exports (command/capture/event plumbing).
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void SuiCmdDelegate(int layerId, int value);
 
@@ -83,7 +62,7 @@ namespace SentinelUI
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void SuiEventSinkNative([MarshalAs(UnmanagedType.LPStr)] string line);
 
-        // ---- issue #2 exports (layer stack + content scheme) ----
+        // Issue #2 exports (layer stack + content scheme).
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int SuiCreateLayerDelegate([MarshalAs(UnmanagedType.LPStr)] string urlUtf8);
 
@@ -95,7 +74,7 @@ namespace SentinelUI
             [MarshalAs(UnmanagedType.LPStr)] string pluginUtf8,
             [MarshalAs(UnmanagedType.LPStr)] string rootPathUtf8);
 
-        // Layer-state queries: int(int) — native takes the layer id.
+        // Layer-state queries: int(int); native takes the layer id.
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int SuiLayerQueryDelegate(int layerId);
 
@@ -119,7 +98,7 @@ namespace SentinelUI
         private static SuiCloseLayerDelegate _reloadLayer;
         private static SuiRegisterRootDelegate _registerContentRoot;
 
-        // ---- issue #3 exports (host v4: per-client event queues); additive ----
+        // Issue #3 exports (per-client event queues; host API v4, additive).
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate ulong SuiRegisterClientDelegate();
 
@@ -136,7 +115,7 @@ namespace SentinelUI
         private static SuiEventSinkNative _clientSink;     // GC guard for the native callback
 
         private static IntPtr _module;
-        private static bool _ownsModule;   // true only when WE LoadLibrary'd it (probe/tests)
+        private static bool _ownsModule;   // true only when we LoadLibrary'd it (probe/tests)
         private static int _apiVersion;
         private static SuiGetApiVersionDelegate _getApiVersion;
         private static SuiPumpEventsDelegate _pumpEvents;
@@ -154,10 +133,10 @@ namespace SentinelUI
 
             try
             {
-                // Attach-first: in-game the ASI loader (ScriptHookV) owns the module and
-                // loaded it at process start, before RPH armed its Present-hook guard.
-                // Never LoadLibrary it from here — a hook installed after RPH's guard
-                // gets reverted and crashes the D3D chain (2026-09-11, LESSONS §2).
+                // Attach-first: in-game the ASI loader owns the module and loaded it at
+                // process start, before RPH armed its Present-hook guard. A LoadLibrary
+                // from here would land the host's Present hook too late: RPH's guard
+                // reverts it and the D3D chain crashes (2026-09-11).
                 _module = GetModuleHandleW("SentinelUI.asi");
                 if (_module != IntPtr.Zero)
                 {
@@ -241,9 +220,9 @@ namespace SentinelUI
                                 "Bootstrap domain receives events; plugin AppDomains get none. Update the runtime.");
                 }
 
-                // NOTE: domain lifetime is owned by Sui, not here. A client AppDomain's
-                // DomainUnload must only release its event queue — never SuiShutdown.
-                // (2026-09-11: wiring Shutdown here made a probe client domain kill the host.)
+                // Domain lifetime is owned by Sui, not here: a client AppDomain's
+                // DomainUnload must only release its event queue, never call SuiShutdown.
+                // (2026-09-11: Shutdown here made a probe client domain kill the host.)
 
                 SuiLog.Info($"Native host ready (API v{_apiVersion}; {(_ownsModule ? "loaded" : "attached")}).");
                 return true;
@@ -272,7 +251,7 @@ namespace SentinelUI
             return proc == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<T>(proc);
         }
 
-        // ---- issue #1 API (safe optional calls; host v2+ has them) ----
+        // Issue #1 API (safe optional calls; host v2+ has them).
         public static bool SupportsIssue1 =>
             _cmdVisible != null && _execJs != null && _isCaptureActive != null;
 
@@ -301,7 +280,7 @@ namespace SentinelUI
             _registerSink(fnPtr);
         }
 
-        // ---- issue #3 API (per-client event queues; host v4+) ----
+        // Issue #3 API (per-client event queues; host v4+).
 
         /// <summary>True when the host supports per-AppDomain event queues.</summary>
         public static bool SupportsClientEvents =>
@@ -313,8 +292,8 @@ namespace SentinelUI
         /// <summary>
         /// Registers this AppDomain as an event client: inbound events are copied to a
         /// per-domain queue and delivered by <see cref="PumpClientEvents"/> on the caller's
-        /// thread — no cross-domain delegate calls. Returns 0 on a v3 host (fall back to
-        /// the legacy single sink / owner mode).
+        /// thread, so no cross-domain delegate calls happen. Returns 0 on a v3 host (fall
+        /// back to the legacy single sink / owner mode).
         /// </summary>
         public static ulong RegisterEventClient(Action<string> handler)
         {
@@ -353,7 +332,7 @@ namespace SentinelUI
             }
         }
 
-        // ---- issue #2 API (layer stack + content scheme; host v3+) ----
+        // Issue #2 API (layer stack + content scheme; host v3+).
         public static bool SupportsLayerModel => _createLayer != null && _closeLayer != null;
 
         public static int CreateLayer(string url) => _createLayer != null ? _createLayer(url) : 0;
@@ -381,7 +360,7 @@ namespace SentinelUI
         public static bool RegisterContentRoot(string plugin, string rootPath) =>
             _registerContentRoot != null && _registerContentRoot(plugin, rootPath) != 0;
 
-        /// <summary>Drains host event queues. MUST be called on the game thread (per-frame).</summary>
+        /// <summary>Drains host event queues. Must be called on the game thread (per-frame).</summary>
         public static void PumpEvents()
         {
             try { _pumpEvents?.Invoke(); }

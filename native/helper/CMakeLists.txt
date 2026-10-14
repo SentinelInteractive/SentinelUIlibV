@@ -1,5 +1,5 @@
-# SentinelUI — dedicated CEF host process (SentinelUI_Host.exe).
-# EXE-hosted so CEF runs in its own process (the shape proven by the Phase-0
+# SentinelUI: dedicated CEF host process (SentinelUI_Host.exe).
+# EXE-hosted so CEF runs in its own process (the shape proven by the OSR
 # harness): no DLL-embedding, no cross-process CEF lifecycle issues, and a page
 # crash can never take the game down.
 

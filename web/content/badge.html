@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SentinelUI badge</title>
+<style>
+  :root {
+    /* Overlay palette. --err is a lightened tint of #e05252: at the 0.90 scrim
+       that red measures 3.6:1, under AA for small text. */
+    --text: #e7e5df;
+    --muted: #9ba3ae;
+    --ok: #4cc38a;
+    --err: #ef6d6d;
+    --scrim: rgba(16, 20, 27, 0.9);   /* 0.90 keeps text at AA over a white scene */
+    --edge: rgba(231, 229, 223, 0.16);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body {
+    font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    /* Click-through layer: no focus target, no mouse, no text selection. */
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* Always-on-top badge (Bootstrap-owned layer: click-through at z 9000) composites
+     above every plugin layer and never steals their input. The skew is the brand
+     angle; the lockup is counter-skewed so the artwork stays square. */
+  .panel {
+    position: fixed; left: 4px; top: 50%;
+    width: min(340px, 34vw);
+    padding: 12px 16px 12px 10px;
+    background: var(--scrim);
+    border: 1px solid var(--edge);
+    border-radius: 4px;
+    /* The one elevation in the overlay: this panel is the topmost surface. */
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+    transform: translateY(-50%) skewX(-6deg);
+    transform-origin: bottom left;   /* the bottom-left corner never leaves the screen */
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  /* The lockup is counter-skewed: the panel leans, the artwork stays square. */
+  .brand svg { flex: 1 1 auto; min-width: 0; height: auto; display: block; transform: skewX(6deg); }
+  .dev { flex: 0 0 auto; font-size: 13px; font-weight: 600; letter-spacing: .14em; color: var(--muted); }
+
+  .phase { margin-top: 8px; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+
+  .stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-top: 6px; }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
+  .clock { font-size: 18px; color: var(--text); }
+  .cpu { font-size: 12px; color: var(--muted); }
+  .state { font-size: 11px; font-weight: 600; letter-spacing: .14em; color: var(--muted); }
+  .state[data-state="live"] { color: var(--ok); }
+  .state[data-state="offline"] { color: var(--err); }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="brand">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="20 0 501.66 114.00" fill="none" role="img" aria-label="Sentinel Interactive">
+        <!-- Sentinel Interactive lockup: wordmark split by the mark, as in the intro -->
+        <text x="20.00" y="72.50" font-family="'Segoe UI', system-ui, sans-serif" font-size="46" font-weight="600" letter-spacing="0.5" fill="#F2F2F4">Sentine</text>
+        <g fill="#F2F2F4">
+          <rect x="205.24" y="17.00" width="20" height="20"/>
+          <rect x="205.24" y="47.00" width="20" height="20"/>
+          <rect x="205.24" y="77.00" width="20" height="20"/>
+          <rect x="241.24" y="17.00" width="20" height="20"/>
+          <rect x="241.24" y="47.00" width="20" height="20"/>
+          <rect x="241.24" y="77.00" width="20" height="20"/>
+        </g>
+        <text x="277.24" y="72.50" font-family="'Segoe UI', system-ui, sans-serif" font-size="46" font-weight="600" letter-spacing="0.5" fill="#F2F2F4">nteractive</text>
+      </svg>
+      <span class="dev">DEV</span>
+    </div>
+
+    <div class="phase">Pre-alpha version</div>
+
+    <div class="stats">
+      <span class="clock mono" id="clock">--:--:--</span>
+      <span class="cpu mono" id="cpu">CPU ...</span>
+      <span class="state" id="link" data-state="checking">CHECKING</span>
+    </div>
+  </div>
+
+  <script src="badge.js"></script>
+</body>
+</html>

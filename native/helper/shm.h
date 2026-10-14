@@ -1,10 +1,8 @@
-// SentinelUI Helper — shared-memory frame transport.
+// SentinelUI Helper: shared-memory frame transport.
 // The EXE-hosted CEF process publishes BGRA frames here; the in-game ASI
 // compositor maps the same named object and uploads them to the D3D11 texture.
 
 #pragma once
-#ifndef SENTINEL_HELPER_SHM_H
-#define SENTINEL_HELPER_SHM_H
 
 #include <windows.h>
 #include <cstdint>
@@ -78,5 +76,3 @@ private:
 };
 
 }  // namespace sui_helper
-
-#endif
