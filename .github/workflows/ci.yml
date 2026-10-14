@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Branch pushes and their PR runs share one group so a ref never builds CEF twice.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  managed:
+    name: managed
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build managed
+        uses: ./.github/actions/build-managed
+
+  native:
+    name: native
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build native
+        uses: ./.github/actions/build-native
+
+      - name: Upload native artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinelui-native
+          path: |
+            native/host/build/SentinelUI.asi
+            native/helper/build/Release/SentinelUI_Host.exe
+          retention-days: 7
+          if-no-files-found: error
+
+  lint:
+    name: lint
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $findings = @()
+          foreach ($dir in @("tools", "samples")) {
+              $findings += @(Invoke-ScriptAnalyzer -Path $dir -Recurse -Settings ./PSScriptAnalyzerSettings.psd1)
+          }
+          if ($findings.Count -gt 0) {
+              $findings | Format-Table -AutoSize | Out-String | Write-Host
+              throw "PSScriptAnalyzer reported $($findings.Count) findings"
+          }
+          Write-Host "PSScriptAnalyzer clean"
+
+      - name: Check JavaScript syntax
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem web, samples/browser-dev -Recurse -Filter *.js -File)
+          foreach ($file in $files) {
+              node --check $file.FullName
+              if ($LASTEXITCODE -ne 0) { throw "node --check failed: $($file.FullName)" }
+          }
+          Write-Host "node --check clean ($($files.Count) files)"

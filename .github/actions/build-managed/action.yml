@@ -1,0 +1,21 @@
+name: Build managed
+description: Build the hoststub ASI and the managed solution, then run HostProbe against the stub.
+
+runs:
+  using: composite
+  steps:
+    - name: Build host stub
+      shell: pwsh
+      run: ./tools/build-hoststub.ps1 -Config Release
+
+    - name: Build managed solution
+      shell: pwsh
+      run: dotnet build managed/SentinelUI.sln -c Release
+
+    - name: Run HostProbe
+      shell: pwsh
+      run: |
+        $probe = Join-Path $env:GITHUB_WORKSPACE "managed/tests/HostProbe/bin/Release/SentinelUI.HostProbe.exe"
+        $stub = Join-Path $env:GITHUB_WORKSPACE "native/hoststub/build/SentinelUI.asi"
+        & $probe $stub
+        if ($LASTEXITCODE -ne 0) { throw "HostProbe failed with exit code $LASTEXITCODE" }
